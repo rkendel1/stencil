@@ -241,3 +241,64 @@ export function autoFix(mask, width, height, opts = {}) {
 
   return { fragmentsRemoved, bridgesAdded };
 }
+
+/**
+ * Morphological closing operation: dilation followed by erosion.
+ * Fills small holes and connects nearby regions for cleaner stencils.
+ * @param {Uint8Array} mask - mutated in place
+ * @param {number} width
+ * @param {number} height
+ * @param {number} radius - structuring element radius
+ */
+export function morphologicalClose(mask, width, height, radius = 1) {
+  // First dilate
+  const temp = new Uint8Array(mask);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      let hasNeighbor = false;
+      
+      for (let dy = -radius; dy <= radius; dy++) {
+        if (hasNeighbor) break;
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          if (mask[ny * width + nx]) {
+            hasNeighbor = true;
+            break;
+          }
+        }
+      }
+      
+      temp[idx] = hasNeighbor ? 1 : 0;
+    }
+  }
+  
+  // Then erode
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      let allNeighbors = true;
+      
+      for (let dy = -radius; dy <= radius; dy++) {
+        if (!allNeighbors) break;
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          if (!temp[ny * width + nx]) {
+            allNeighbors = false;
+            break;
+          }
+        }
+      }
+      
+      mask[idx] = allNeighbors ? 1 : 0;
+    }
+  }
+}

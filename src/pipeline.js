@@ -6,10 +6,10 @@
  *   imageData → grayscale → clustering → masks → validation → vectorization → Layer[]
  */
 
-import { toGrayscale, applySmoothing } from './imageLoader.js';
-import { kmeans, posterize, adaptiveThreshold } from './kmeans.js';
+import { toGrayscale, applySmoothing, bilateralFilter, normalizeContrast, sharpenEdges } from './imageLoader.js';
+import { kmeans, posterize, adaptiveThreshold, toBinaryMask } from './kmeans.js';
 import { vectorize } from './vectorizer.js';
-import { validateMask, autoFix } from './validator.js';
+import { validateMask, autoFix, morphologicalClose } from './validator.js';
 
 // Palette of default layer colors
 const DEFAULT_COLORS = [
@@ -59,16 +59,40 @@ export async function runPipeline(imageData, settings, onProgress) {
 
   const k = Math.max(2, Math.min(12, layerCount));
 
-  // ---- Step 1: Preprocess ----
-  onProgress?.(1, 6, 'Preprocessing image…');
+  // ---- Step 1: Enhanced Preprocessing ----
+  onProgress?.(1, 7, 'Preprocessing image…');
   await tick();
 
-  const smoothed = applySmoothing(imageData, smoothing);
-  const gray = toGrayscale(smoothed);
+  // Apply edge-preserving noise reduction
+  const denoised = smoothing > 0 
+    ? bilateralFilter(imageData, Math.min(smoothing + 2, 5), 0.1)
+    : imageData;
+  
+  // Sharpen edges for better definition
+  const sharpened = sharpenEdges(denoised, 0.5);
+  
+  // Convert to grayscale
+  let gray = toGrayscale(sharpened);
+  
+  // Normalize contrast to maximize dynamic range
+  gray = normalizeContrast(gray);
+  
   const { width, height } = imageData;
 
-  // ---- Step 2: Cluster / Segment ----
-  onProgress?.(2, 6, 'Segmenting layers…');
+  // ---- Step 2: Convert to Pure Black & White ----
+  onProgress?.(2, 7, 'Converting to pure B&W…');
+  await tick();
+  
+  // For stencil work, we need pure binary values (no gray)
+  // Apply aggressive contrast to remove mid-tones
+  for (let i = 0; i < gray.length; i++) {
+    // Sigmoid curve to push values toward 0 or 1
+    const v = gray[i];
+    gray[i] = 1 / (1 + Math.exp(-12 * (v - 0.5)));
+  }
+  
+  // ---- Step 3: Cluster / Segment ----
+  onProgress?.(3, 7, 'Segmenting layers…');
   await tick();
 
   // Subsample for K-Means if image is large (keeps it fast)
@@ -114,34 +138,43 @@ export async function runPipeline(imageData, settings, onProgress) {
     assignments = result.assignments;
   }
 
-  // ---- Step 3: Build masks ----
-  onProgress?.(3, 6, 'Building masks…');
+  // ---- Step 4: Build masks ----
+  onProgress?.(4, 7, 'Building clean binary masks…');
   await tick();
 
   const masks = Array.from({ length: k }, () => new Uint8Array(width * height));
   for (let i = 0; i < assignments.length; i++) {
     masks[assignments[i]][i] = 1;
   }
+  
+  // Clean up masks with morphological operations
+  for (let i = 0; i < k; i++) {
+    morphologicalClose(masks[i], width, height, 2);
+  }
 
-  // ---- Step 4: Validate + Auto-fix ----
-  onProgress?.(4, 6, 'Validating structure…');
+  // ---- Step 5: Validate + Auto-fix ----
+  onProgress?.(5, 7, 'Validating structure…');
   await tick();
 
   const validations = masks.map(mask => {
     const v = validateMask(mask, width, height, 50);
 
     if (doAutoFix) {
+      // More aggressive cleanup for cleaner stencils
       autoFix(mask, width, height, {
-        minIslandArea: 16,
+        minIslandArea: 25, // Remove larger fragments
         bridgeWidth:   bridgeThickness,
       });
+      
+      // Apply morphological close again after fixing
+      morphologicalClose(mask, width, height, 1);
     }
 
     return v;
   });
 
-  // ---- Step 5: Vectorize ----
-  onProgress?.(5, 6, 'Vectorizing layers…');
+  // ---- Step 6: Vectorize ----
+  onProgress?.(6, 7, 'Vectorizing layers…');
   await tick();
 
   const epsilon = Math.max(0.1, simplify);
@@ -173,8 +206,8 @@ export async function runPipeline(imageData, settings, onProgress) {
     };
   });
 
-  // ---- Step 6: Done ----
-  onProgress?.(6, 6, 'Complete');
+  // ---- Step 7: Done ----
+  onProgress?.(7, 7, 'Complete');
 
   return layers;
 }
