@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stencil Generator — Multi-Layer Stencil Maker</title>
+  <link rel="stylesheet" href="styles/main.css" />
+</head>
+<body>
+<div id="app" role="main">
+
+  <!-- ===== HEADER ===== -->
+  <header role="banner">
+    <div class="logo">Stencil<span>Gen</span></div>
+    <span class="tagline">Multi-Layer Stencil Generator</span>
+    <div class="spacer"></div>
+    <button class="btn-header" id="btn-about" aria-label="About this application">About</button>
+  </header>
+
+  <!-- ===== SIDEBAR LEFT: UPLOAD + SETTINGS ===== -->
+  <aside id="sidebar-left" aria-label="Upload and settings">
+
+    <!-- Upload -->
+    <div class="panel-section">
+      <h3>Image Input</h3>
+
+      <div id="drop-zone"
+           role="button"
+           tabindex="0"
+           aria-label="Drop image here or click to browse"
+           aria-describedby="drop-hint">
+        <div class="drop-icon" aria-hidden="true">🖼</div>
+        <p id="drop-hint">Drag &amp; drop an image here</p>
+        <button class="btn-browse" type="button">Browse files</button>
+      </div>
+
+      <input type="file" id="file-input"
+             accept="image/png,image/jpeg,image/webp,image/svg+xml"
+             aria-label="Upload image file" />
+
+      <div class="url-row">
+        <input type="url" id="url-input"
+               placeholder="…or paste image URL"
+               aria-label="Image URL" />
+        <button type="button" id="btn-load-url" aria-label="Load image from URL">→</button>
+      </div>
+
+      <div id="image-info" aria-live="polite"></div>
+    </div>
+
+    <!-- Settings -->
+    <div class="panel-section">
+      <h3>Layer Settings</h3>
+
+      <div class="setting-row">
+        <label for="layer-count">Layers</label>
+        <input type="number" id="layer-count"
+               min="2" max="12" value="4"
+               aria-label="Number of stencil layers" />
+      </div>
+
+      <div class="setting-row">
+        <label for="seg-mode">Method</label>
+        <select id="seg-mode" aria-label="Segmentation method">
+          <option value="kmeans">K-Means</option>
+          <option value="threshold">Threshold</option>
+          <option value="posterize">Posterize</option>
+        </select>
+      </div>
+
+      <div class="setting-row">
+        <label for="smoothing">Smoothing</label>
+        <input type="range" id="smoothing"
+               min="0" max="5" step="1" value="1"
+               aria-label="Smoothing level" aria-valuemin="0" aria-valuemax="5" />
+      </div>
+
+      <div class="setting-row">
+        <label for="simplify">Simplify</label>
+        <input type="range" id="simplify"
+               min="0" max="5" step="0.5" value="1"
+               aria-label="Path simplification level" />
+      </div>
+
+      <div class="toggle-row">
+        <label for="auto-fix">Auto-fix islands</label>
+        <label class="toggle">
+          <input type="checkbox" id="auto-fix" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row">
+        <label for="reg-marks">Registration marks</label>
+        <label class="toggle">
+          <input type="checkbox" id="reg-marks" checked />
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <label for="bridge-thickness">Bridge px</label>
+        <input type="number" id="bridge-thickness"
+               min="2" max="20" value="4"
+               aria-label="Bridge thickness in pixels" />
+      </div>
+
+      <button id="btn-generate" type="button" disabled
+              aria-label="Generate stencil layers">
+        ⚡ Generate Layers
+      </button>
+
+      <div id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+        <div id="progress-fill"></div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ===== MAIN CANVAS AREA ===== -->
+  <main id="canvas-area" aria-label="Stencil preview canvas">
+
+    <div id="canvas-toolbar">
+      <div class="view-tabs" role="tablist" aria-label="Preview mode">
+        <button class="tab-btn active" role="tab" aria-selected="true"
+                data-view="composite" id="tab-composite">Composite</button>
+        <button class="tab-btn" role="tab" aria-selected="false"
+                data-view="original" id="tab-original">Original</button>
+        <button class="tab-btn" role="tab" aria-selected="false"
+                data-view="vector" id="tab-vector">Vector</button>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="zoom-controls" aria-label="Zoom controls">
+        <button type="button" id="btn-zoom-out" aria-label="Zoom out">−</button>
+        <span id="zoom-label">100%</span>
+        <button type="button" id="btn-zoom-in" aria-label="Zoom in">+</button>
+        <button type="button" id="btn-zoom-fit" aria-label="Fit to screen">⊡</button>
+      </div>
+    </div>
+
+    <div id="canvas-wrapper">
+      <div id="canvas-viewport">
+        <canvas id="main-canvas" width="800" height="600"
+                aria-label="Stencil preview canvas"></canvas>
+      </div>
+      <div id="empty-state" aria-hidden="true">
+        <div class="empty-icon">✂</div>
+        <p>Upload an image to get started</p>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ===== SIDEBAR RIGHT: LAYERS ===== -->
+  <aside id="sidebar-right" aria-label="Layers panel">
+    <div id="layers-header">
+      <h3>Layers</h3>
+    </div>
+    <div id="layers-list" role="list" aria-label="Stencil layers">
+      <p id="layers-empty-msg" aria-live="polite" style="text-align:center;color:var(--text-dim);font-size:11px;padding:24px 8px;line-height:1.6;">
+        No layers yet — upload an image and click Generate
+      </p>
+    </div>
+  </aside>
+
+  <!-- ===== FOOTER: EXPORT ===== -->
+  <footer role="contentinfo">
+    <span class="footer-label">Export:</span>
+
+    <button class="btn-export" id="btn-export-svg" disabled
+            aria-label="Export all layers as SVG">SVG</button>
+    <button class="btn-export" id="btn-export-pdf" disabled
+            aria-label="Export all layers as PDF">PDF</button>
+    <button class="btn-export" id="btn-export-png" disabled
+            aria-label="Export all layers as PNG">PNG</button>
+
+    <div class="spacer"></div>
+
+    <button class="btn-export primary" id="btn-export-all" disabled
+            aria-label="Export all layers as ZIP">⬇ Export All</button>
+
+    <button class="btn-export" id="btn-export-options" disabled
+            aria-label="Export options">⚙</button>
+
+    <span class="footer-info" id="footer-status" aria-live="polite"></span>
+  </footer>
+
+</div>
+
+<!-- ===== EXPORT OPTIONS MODAL ===== -->
+<div id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal">
+    <h2 id="modal-title">Export Options</h2>
+
+    <div class="modal-section">
+      <label for="export-dpi">DPI</label>
+      <input type="number" id="export-dpi" value="300" min="72" max="1200" />
+    </div>
+
+    <div class="modal-section">
+      <label for="export-format">Format</label>
+      <select id="export-format">
+        <option value="svg">SVG (Vector)</option>
+        <option value="pdf">PDF (Vector)</option>
+        <option value="png">PNG (Raster)</option>
+        <option value="eps">EPS (Vector)</option>
+      </select>
+    </div>
+
+    <div class="modal-section">
+      <label>Layer selection</label>
+      <select id="export-layers">
+        <option value="all">All layers</option>
+        <option value="selected">Selected layer only</option>
+        <option value="visible">Visible layers only</option>
+      </select>
+    </div>
+
+    <div class="modal-section">
+      <div class="checkbox-row">
+        <input type="checkbox" id="opt-reg-marks" checked />
+        <label for="opt-reg-marks">Include registration marks</label>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="opt-color-fill" checked />
+        <label for="opt-color-fill">Include color fills</label>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="opt-bw" />
+        <label for="opt-bw">Black &amp; white stencil mode</label>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="opt-transparent" checked />
+        <label for="opt-transparent">Transparent background (PNG)</label>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modal-cancel">Cancel</button>
+      <button class="btn-ok" id="modal-ok">Export</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== ABOUT MODAL ===== -->
+<div id="about-overlay" role="dialog" aria-modal="true" aria-labelledby="about-title"
+     style="position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:100;display:none;align-items:center;justify-content:center;">
+  <div class="modal" style="max-width:460px;">
+    <h2 id="about-title">StencilGen</h2>
+    <p style="color:var(--text-dim);font-size:13px;line-height:1.7;margin-bottom:12px;">
+      A professional multi-layer stencil generation tool. Upload any image, choose the number of layers, and generate clean vector stencil files suitable for laser cutters, vinyl cutters, CNC plotters, and manual cutting workflows.
+    </p>
+    <p style="color:var(--text-dim);font-size:12px;line-height:1.6;">
+      <strong style="color:var(--text)">Pipeline:</strong> K-means / posterize segmentation → marching-squares vectorization → island detection &amp; bridge generation → SVG / PDF / PNG export with registration marks.
+    </p>
+    <div class="modal-actions">
+      <button class="btn-ok" id="about-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== TOAST CONTAINER ===== -->
+<div id="toast-container" aria-live="assertive" aria-atomic="true"></div>
+
+<!-- ===== SCRIPTS ===== -->
+<script type="module" src="src/app.js"></script>
+</body>
+</html>
