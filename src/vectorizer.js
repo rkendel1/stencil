@@ -25,7 +25,7 @@ const MS_TABLE = [
   [[3, 2]],         // 11: TL+TR+BL
   [[2, 0]],         // 12: BR+BL
   [[2, 1]],         // 13: TL+BR+BL
-  [[0, 1]],         // 14: TR+BR+BL  (same positions as 1 / reversed winding)
+  [[0, 1]],         // 14: TR+BR+BL  (only TL outside → left↔top corner, reversed winding from case 1)
   [],               // 15: all inside
 ];
 

@@ -370,15 +370,6 @@ header .btn-header:hover { background: var(--surface2); }
   flex-direction: column;
   gap: 6px;
 }
-#layers-list:empty::after {
-  content: 'No layers yet — upload an image and click Generate';
-  display: block;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 11px;
-  padding: 24px 8px;
-  line-height: 1.6;
-}
 
 .layer-card {
   background: var(--surface2);

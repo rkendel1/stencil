@@ -226,8 +226,8 @@ export function buildPDF(layers, opts = {}) {
   // Simple approach: embed SVG data as an attachment and render a PNG
   // thumbnail as the page content.
   const canvas = renderToCanvas(layers, { ...opts, dpi: 72 });
-  const pngDataURL = canvas.toDataURL('image/jpeg', 0.92); // JPEG for smaller size
-  const base64Data = pngDataURL.split(',')[1];
+  const imgDataURL = canvas.toDataURL('image/jpeg', 0.92); // JPEG for smaller file size
+  const base64Data = imgDataURL.split(',')[1];
   const imgBytes   = base64ToUint8Array(base64Data);
   const imgLen     = imgBytes.length;
 

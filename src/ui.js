@@ -42,6 +42,16 @@ export function renderLayerPanel(layers) {
   const list = document.getElementById('layers-list');
   list.innerHTML = '';
 
+  if (!layers.length) {
+    const emptyMsg = document.createElement('p');
+    emptyMsg.id = 'layers-empty-msg';
+    emptyMsg.setAttribute('aria-live', 'polite');
+    emptyMsg.style.cssText = 'text-align:center;color:var(--text-dim);font-size:11px;padding:24px 8px;line-height:1.6;';
+    emptyMsg.textContent = 'No layers yet — upload an image and click Generate';
+    list.appendChild(emptyMsg);
+    return;
+  }
+
   layers.forEach((layer, idx) => {
     const card = buildLayerCard(layer, idx);
     list.appendChild(card);
@@ -99,13 +109,14 @@ function buildLayerCard(layer, idx) {
   const actions = document.createElement('div');
   actions.className = 'layer-actions';
 
-  // Visibility toggle
-  const visBtn = makeBtn(layer.visible ? '👁' : '👁‍🗨', 'Toggle visibility', layer.visible ? 'active' : '');
+  // Visibility toggle — use reliable unicode symbols instead of emoji
+  const visBtn = makeBtn(layer.visible ? '◉' : '○', 'Toggle visibility', layer.visible ? 'active' : '');
   visBtn.addEventListener('click', e => {
     e.stopPropagation();
     layer.visible = !layer.visible;
     card.classList.toggle('hidden-layer', !layer.visible);
-    visBtn.textContent = layer.visible ? '👁' : '👁‍🗨';
+    visBtn.textContent = layer.visible ? '◉' : '○';
+    visBtn.setAttribute('aria-label', layer.visible ? 'Hide layer' : 'Show layer');
     visBtn.classList.toggle('active', layer.visible);
     redraw();
   });

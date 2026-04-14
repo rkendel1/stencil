@@ -162,8 +162,9 @@ async function applyImage(img, width, height, name) {
   state.originalImg = img;
   setOriginalImage(img);
 
-  // Working resolution: max 1200px
-  const { imageData, scale } = imageToData(img, 1200);
+  // Cap processing resolution to balance quality vs. speed (K-means + marching squares)
+  const MAX_PROCESSING_DIM = 1200;
+  const { imageData, scale } = imageToData(img, MAX_PROCESSING_DIM);
   state.imageData = imageData;
   state.layers    = [];
 

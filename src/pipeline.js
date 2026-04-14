@@ -83,7 +83,7 @@ export async function runPipeline(imageData, settings, onProgress) {
     graySample = sampled;
   }
 
-  let result;
+  let result = null;
   switch (segmentationMode) {
     case 'threshold':
       result = adaptiveThreshold(graySample, k);
