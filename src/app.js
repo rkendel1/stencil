@@ -241,7 +241,7 @@ async function generateLayers() {
     state.processing = false;
     generateBtn.disabled = false;
     generateBtn.textContent = '⚡ Generate Layers';
-    setProgress(6, 6); // complete
+    setProgress(7, 7); // complete
   }
 }
 

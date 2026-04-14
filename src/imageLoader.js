@@ -179,3 +179,146 @@ export function toGrayscale(imageData) {
   }
   return gray;
 }
+
+/**
+ * Apply edge-preserving bilateral filter to remove noise while keeping edges sharp.
+ * @param {ImageData} imageData
+ * @param {number} spatialSigma - spatial standard deviation
+ * @param {number} rangeSigma - range (intensity) standard deviation
+ * @returns {ImageData}
+ */
+export function bilateralFilter(imageData, spatialSigma = 3, rangeSigma = 0.1) {
+  const { width, height, data } = imageData;
+  const output = new ImageData(width, height);
+  const out = output.data;
+  
+  const radius = Math.ceil(spatialSigma * 2);
+  const spatialCoeff = -0.5 / (spatialSigma * spatialSigma);
+  const rangeCoeff = -0.5 / (rangeSigma * rangeSigma);
+  
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      const centerR = data[idx] / 255;
+      const centerG = data[idx + 1] / 255;
+      const centerB = data[idx + 2] / 255;
+      
+      let sumR = 0, sumG = 0, sumB = 0, sumWeight = 0;
+      
+      for (let dy = -radius; dy <= radius; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          
+          const nidx = (ny * width + nx) * 4;
+          const nR = data[nidx] / 255;
+          const nG = data[nidx + 1] / 255;
+          const nB = data[nidx + 2] / 255;
+          
+          // Spatial distance
+          const spatialDist = dx * dx + dy * dy;
+          const spatialWeight = Math.exp(spatialDist * spatialCoeff);
+          
+          // Range distance (intensity difference)
+          const rangeDist = (nR - centerR) * (nR - centerR) + 
+                           (nG - centerG) * (nG - centerG) + 
+                           (nB - centerB) * (nB - centerB);
+          const rangeWeight = Math.exp(rangeDist * rangeCoeff);
+          
+          const weight = spatialWeight * rangeWeight;
+          sumR += nR * weight;
+          sumG += nG * weight;
+          sumB += nB * weight;
+          sumWeight += weight;
+        }
+      }
+      
+      out[idx]     = Math.round((sumR / sumWeight) * 255);
+      out[idx + 1] = Math.round((sumG / sumWeight) * 255);
+      out[idx + 2] = Math.round((sumB / sumWeight) * 255);
+      out[idx + 3] = data[idx + 3];
+    }
+  }
+  
+  return output;
+}
+
+/**
+ * Normalize contrast using histogram stretching to maximize dynamic range.
+ * @param {Float32Array} gray - grayscale values [0,1]
+ * @returns {Float32Array} normalized values [0,1]
+ */
+export function normalizeContrast(gray) {
+  // Find min and max (ignoring extreme outliers - top/bottom 1%)
+  const sorted = Float32Array.from(gray).sort();
+  const n = sorted.length;
+  const minIdx = Math.floor(n * 0.01);
+  const maxIdx = Math.floor(n * 0.99);
+  const min = sorted[minIdx];
+  const max = sorted[maxIdx];
+  
+  const range = max - min;
+  if (range < 0.01) return gray; // avoid division by near-zero
+  
+  const normalized = new Float32Array(gray.length);
+  for (let i = 0; i < gray.length; i++) {
+    // Stretch to full [0,1] range
+    const val = (gray[i] - min) / range;
+    normalized[i] = Math.max(0, Math.min(1, val));
+  }
+  
+  return normalized;
+}
+
+/**
+ * Apply aggressive sharpening to enhance edges.
+ * @param {ImageData} imageData
+ * @param {number} strength - sharpening strength (0-2, default 1)
+ * @returns {ImageData}
+ */
+export function sharpenEdges(imageData, strength = 1.0) {
+  const { width, height, data } = imageData;
+  const output = new ImageData(width, height);
+  const out = output.data;
+  
+  // Unsharp mask: original + strength * (original - blurred)
+  const amount = strength;
+  
+  // Simple 3x3 sharpening kernel
+  const kernel = [
+    0, -amount, 0,
+    -amount, 1 + 4 * amount, -amount,
+    0, -amount, 0
+  ];
+  
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      
+      let sumR = 0, sumG = 0, sumB = 0;
+      
+      for (let ky = -1; ky <= 1; ky++) {
+        for (let kx = -1; kx <= 1; kx++) {
+          const ny = Math.max(0, Math.min(height - 1, y + ky));
+          const nx = Math.max(0, Math.min(width - 1, x + kx));
+          const nidx = (ny * width + nx) * 4;
+          const kidx = (ky + 1) * 3 + (kx + 1);
+          
+          sumR += data[nidx] * kernel[kidx];
+          sumG += data[nidx + 1] * kernel[kidx];
+          sumB += data[nidx + 2] * kernel[kidx];
+        }
+      }
+      
+      out[idx]     = Math.max(0, Math.min(255, sumR));
+      out[idx + 1] = Math.max(0, Math.min(255, sumG));
+      out[idx + 2] = Math.max(0, Math.min(255, sumB));
+      out[idx + 3] = data[idx + 3];
+    }
+  }
+  
+  return output;
+}
