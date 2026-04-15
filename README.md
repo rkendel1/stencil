@@ -1,1 +1,217 @@
-# stencil
+# StencilGen - Professional Multi-Layer Stencil Generator
+
+A professional-grade web application for generating multi-layer stencil designs from images. Features advanced image processing, intelligent layer segmentation, and production-ready vector output.
+
+## Features
+
+### Core Capabilities
+- **Multi-Layer Segmentation**: K-means, adaptive thresholding, or posterization
+- **Professional Vectorization**: Powered by Potrace for industry-standard Bezier curves
+- **Advanced Image Processing**: OpenCV.js integration for optimized operations
+- **Intelligent Auto-Fix**: Automatic island detection and bridge generation
+- **Clean Output**: SVG, PDF, PNG export with registration marks
+
+### Image Processing Pipeline
+1. **Preprocessing**: Bilateral filtering, histogram normalization, edge sharpening
+2. **Segmentation**: Otsu's method, k-means clustering, or posterization
+3. **Binary Conversion**: Sigmoid contrast compression for pure B&W
+4. **Morphological Cleanup**: Closing operations to smooth boundaries
+5. **Validation**: Fragment removal (<25px), connectivity analysis
+6. **Vectorization**: Marching squares + Douglas-Peucker simplification
+7. **Export**: SVG paths with color fills and registration marks
+
+## Quick Start
+
+### Local Development
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Preview production build
+npm run preview
+```
+
+The application will open at `http://localhost:8080`
+
+## Deployment
+
+### Vercel Deployment (Recommended)
+
+#### Option 1: GitHub Integration (Easiest)
+1. Push your code to GitHub
+2. Go to [vercel.com](https://vercel.com) and sign in
+3. Click "Import Project"
+4. Select your `stencil` repository
+5. Vercel will auto-detect the Vite configuration
+6. Click "Deploy"
+
+**Automatic Deployments**: Every push to `main` triggers a production deployment. Pull requests get preview deployments.
+
+#### Option 2: Vercel CLI
+
+```bash
+# Install Vercel CLI
+npm install -g vercel
+
+# Deploy (first time - follow prompts)
+vercel
+
+# Deploy to production
+vercel --prod
+```
+
+#### Option 3: GitHub Actions (Already Configured)
+
+The repository includes a GitHub Actions workflow (`.github/workflows/deploy.yml`) for automatic deployments.
+
+**Setup Required**:
+1. Go to your Vercel dashboard → Settings → Tokens
+2. Create a new token
+3. Add these secrets to your GitHub repository (Settings → Secrets):
+   - `VERCEL_TOKEN`: Your Vercel API token
+   - `VERCEL_ORG_ID`: Found in Vercel project settings
+   - `VERCEL_PROJECT_ID`: Found in Vercel project settings
+
+Push to `main` or open a PR, and GitHub Actions will handle deployment automatically.
+
+### Environment Configuration
+
+For production deployment, the following are pre-configured:
+- ✅ Vite build optimization with code splitting
+- ✅ Asset caching headers (1 year for immutable assets)
+- ✅ WASM support for OpenCV.js
+- ✅ Security headers (XSS, Frame, Content-Type)
+- ✅ Clean URLs and SPA routing
+
+## Technology Stack
+
+### Core
+- **Vite**: Modern build tool with HMR and optimized bundling
+- **ES Modules**: Native JavaScript modules for better tree-shaking
+
+### Image Processing
+- **OpenCV.js** (~8MB WASM): Industrial-strength computer vision
+  - Gaussian blur, morphological operations
+  - Canny edge detection, distance transforms
+  - 2-5x faster than custom implementations
+  
+- **Potrace** (~100KB): Professional bitmap-to-vector tracing
+  - Industry-standard Bezier curve output
+  - Optimized curve simplification
+  - Better edge smoothing than marching squares
+  
+- **Jimp** (~500KB): Pure JavaScript image manipulation
+  - Format conversion, resizing, rotation
+  - Used for preprocessing and thumbnails
+
+### Custom Algorithms
+- K-means++ clustering
+- Otsu's optimal thresholding
+- Bilateral filtering
+- Morphological closing
+- Connected component labeling
+- Marching squares vectorization
+- Douglas-Peucker simplification
+
+## Project Structure
+
+```
+stencil/
+├── src/
+│   ├── app.js                    # Main application logic
+│   ├── imageLoader.js            # Image loading & preprocessing
+│   ├── kmeans.js                 # Clustering & thresholding
+│   ├── pipeline.js               # Main processing pipeline
+│   ├── validator.js              # Structural validation
+│   ├── vectorizer.js             # Path generation
+│   ├── exporter.js               # SVG/PDF/PNG export
+│   ├── ui.js                     # User interface
+│   ├── opencvIntegration.js      # OpenCV.js wrapper
+│   └── potraceIntegration.js     # Potrace wrapper
+├── styles/
+│   └── main.css                  # Application styles
+├── index.html                    # Entry point
+├── vite.config.js                # Vite configuration
+├── vercel.json                   # Vercel deployment config
+├── package.json                  # Dependencies & scripts
+└── .github/workflows/deploy.yml  # CI/CD automation
+```
+
+## Usage
+
+1. **Upload Image**: Drag & drop, file picker, or URL
+2. **Configure Settings**:
+   - Layer count (2-12)
+   - Segmentation method (K-means, Threshold, Posterize)
+   - Smoothing level (0-5)
+   - Simplification tolerance
+   - Auto-fix islands (recommended)
+   - Bridge thickness
+3. **Generate**: Click "Generate Layers"
+4. **Review**: Check layers, toggle visibility, adjust colors
+5. **Export**: Download as SVG, PDF, or PNG
+
+## Performance
+
+- **Target**: <5 seconds for 1920×1080 images
+- **Optimization**: 
+  - Bilateral filtering: O(n) with spatial windowing
+  - K-means: Subsampling for large images (>80k pixels)
+  - Vectorization: Efficient marching squares + DP simplification
+  - Build: Code splitting, tree-shaking, minification
+
+## Browser Support
+
+- Chrome 90+ ✅
+- Firefox 88+ ✅
+- Safari 14+ ✅
+- Edge 90+ ✅
+
+## License
+
+MIT
+
+## Contributing
+
+Contributions welcome! Please ensure:
+- Code follows existing style
+- New algorithms include documentation
+- Performance-critical code is optimized
+- Changes don't break existing tests
+
+## Roadmap
+
+### Phase 1: Testing (High Priority)
+- [ ] Vitest setup for unit tests
+- [ ] Playwright for E2E browser tests
+- [ ] Visual regression tests with pixelmatch
+- [ ] Performance benchmarking suite
+
+### Phase 2: Algorithm Improvements
+- [ ] Bradley adaptive thresholding
+- [ ] A* pathfinding for intelligent bridges
+- [ ] Chaikin curve smoothing
+- [ ] Multi-scale segmentation
+
+### Phase 3: Advanced Features
+- [ ] Web Worker parallelization
+- [ ] Intelligent layer ordering
+- [ ] Curved bridges (Catmull-Rom splines)
+- [ ] Real-time preview with partial processing
+
+### Phase 4: UX Enhancements
+- [ ] Undo/redo history
+- [ ] Layer editing tools
+- [ ] Custom color palettes
+- [ ] Batch processing
+
+## Support
+
+For issues, feature requests, or questions, please open an issue on GitHub.
