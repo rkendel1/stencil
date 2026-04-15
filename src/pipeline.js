@@ -388,12 +388,11 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
     morphologicalClose(masks[i], width, height, 1);
   }
 
-  // Replace the darkest cluster mask with a smooth outer silhouette.
+  // Replace the darkest cluster mask with the simplest possible outer silhouette.
   // A real airbrush Layer 1 is the broad, filled base-coat shape — no internal
   // holes or detail cuts (like the left panel of a two-layer skull stencil set).
-  // We use corner-based background detection + BFS flood-fill so this works for
-  // both dark and light-colored subjects on a white background.
-  masks[0] = _buildSilhouetteMask(gray, width, height);
+  // Union all subject clusters + aggressive morphological closing fills ALL holes.
+  masks[0] = _buildSilhouetteMask(masks, width, height);
   // Clear the background cluster (lightest centroid = masks[k-1]) so it sorts
   // last and the silhouette is guaranteed to become Layer 1.
   masks[k - 1] = new Uint8Array(width * height);
@@ -571,125 +570,35 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
  * add progressively finer detail on top.
  *
  * Algorithm:
- *   1. Sample 4 corner patches to estimate the background color (`bgValue`).
- *      This works for both white and non-white backgrounds and is robust for
- *      light-colored subjects (cream skull on white) because the corners are
- *      sampled far from the subject.
- *   2. 4-connected BFS flood-fill from every image-border pixel whose value is
- *      within `tolerance` of `bgValue`, marking the true external background.
- *      The BFS stops at any subject boundary that contrasts more than the
- *      tolerance with the background — this includes dark outlines AND the
- *      gentle cream-to-white boundary of colored illustrations.
- *   3. Silhouette = every pixel NOT reached from the border.  Enclosed interior
- *      holes (teeth gaps, eye sockets) have the same color as the exterior
- *      background but are unreachable through the subject, so they are
- *      automatically filled in, giving a solid base-coat shape.
- *   4. Fallback: when the corner-estimated `bgValue` is dark (< 0.4), the BFS
- *      covers < 2 % or > 97 % of the image — Otsu binary threshold is used
- *      to produce a usable (if un-hole-filled) silhouette rather than a blank.
+ *   1. Union all subject k-means clusters (masks[0..k-2]; masks[k-1] is background)
+ *   2. Apply aggressive morphological closing (radius 5) to fill ALL interior holes
+ *      (eyes, teeth, decorations) and smooth the outer boundary
+ *   3. This produces the simplest possible solid silhouette — just the broad
+ *      outer shape with zero internal detail
  *
- * @param {Float32Array} gray   - processed grayscale values in [0,1]
+ * @param {Uint8Array[]} masks  - k segment masks, ordered darkest → lightest
  * @param {number}       width
  * @param {number}       height
  * @returns {Uint8Array} silhouette mask (1 = subject, 0 = background)
  */
-function _buildSilhouetteMask(gray, width, height) {
-  const n = gray.length;
+function _buildSilhouetteMask(masks, width, height) {
+  const k = masks.length;
+  const n = width * height;
 
-  // ── Step 1: Estimate background color from 4 corner patches ──
-  const patchSize = Math.max(3, Math.min(8, Math.floor(Math.min(width, height) / 12)));
-  let bgSum = 0, bgSqSum = 0, bgCount = 0;
-  for (let y = 0; y < patchSize; y++) {
-    for (let x = 0; x < patchSize; x++) {
-      for (const idx of [
-        y * width + x,                               // top-left
-        y * width + (width - 1 - x),                // top-right
-        (height - 1 - y) * width + x,               // bottom-left
-        (height - 1 - y) * width + (width - 1 - x), // bottom-right
-      ]) {
-        bgSum += gray[idx]; bgSqSum += gray[idx] * gray[idx]; bgCount++;
-      }
-    }
-  }
-  const bgValue = bgSum / bgCount;
-  const bgStd   = Math.sqrt(Math.max(0, bgSqSum / bgCount - bgValue * bgValue));
-  // Tolerance covers background noise but stops at the subject boundary
-  // (any boundary with > ~0.04 contrast from background color is treated as subject).
-  const tolerance = Math.min(0.12, Math.max(bgStd * 4, 0.04));
-
-  // ── Step 2: BFS flood-fill from image border through background pixels ──
-  const bgReached = new Uint8Array(n);
-  const queue     = new Int32Array(n);
-  let head = 0, tail = 0;
-
-  const enqueue = (idx) => {
-    if (!bgReached[idx] && Math.abs(gray[idx] - bgValue) <= tolerance) {
-      bgReached[idx] = 1;
-      queue[tail++] = idx;
-    }
-  };
-
-  for (let x = 0; x < width; x++) {
-    enqueue(x);
-    enqueue((height - 1) * width + x);
-  }
-  for (let y = 1; y < height - 1; y++) {
-    enqueue(y * width);
-    enqueue(y * width + (width - 1));
-  }
-
-  while (head < tail) {
-    const idx = queue[head++];
-    const x   = idx % width;
-    const y   = (idx / width) | 0;
-    if (y > 0)           enqueue(idx - width);
-    if (y < height - 1)  enqueue(idx + width);
-    if (x > 0)           enqueue(idx - 1);
-    if (x < width - 1)   enqueue(idx + 1);
-  }
-
-  // ── Step 3: Fallback — when BFS cannot establish a reliable boundary ──
-  // Triggers when: (a) subject fills the frame, (b) subject indistinguishable
-  // from background, OR (c) corners are dark (tightly-cropped dark subject).
-  let reachedCount = 0;
-  for (let i = 0; i < n; i++) reachedCount += bgReached[i];
-  const needsFallback = reachedCount < n * 0.02
-                     || reachedCount > n * 0.97
-                     || bgValue < 0.4;
-
-  if (needsFallback) {
-    // Otsu binary threshold as a best-effort silhouette
-    const numBins = 256;
-    const histogram = new Int32Array(numBins);
+  // Union all subject clusters (skip masks[k-1] which is the lightest/background)
+  const union = new Uint8Array(n);
+  for (let c = 0; c < k - 1; c++) {
+    const m = masks[c];
     for (let i = 0; i < n; i++) {
-      histogram[Math.min(numBins - 1, Math.floor(gray[i] * numBins))]++;
+      if (m[i]) union[i] = 1;
     }
-    let s = 0;
-    for (let i = 0; i < numBins; i++) s += i * histogram[i];
-    let sumB = 0, countB = 0, maxVar = 0, bestT = 0;
-    for (let t = 0; t < numBins; t++) {
-      countB += histogram[t];
-      if (countB === 0) continue;
-      const countF = n - countB;
-      if (countF === 0) break;
-      sumB += t * histogram[t];
-      const meanB = sumB / countB;
-      const meanF = (s - sumB) / countF;
-      const variance = countB * countF * (meanB - meanF) * (meanB - meanF);
-      if (variance > maxVar) { maxVar = variance; bestT = t; }
-    }
-    const thresh = (bestT + 1) / numBins;
-    const binary = new Uint8Array(n);
-    for (let i = 0; i < n; i++) binary[i] = gray[i] < thresh ? 1 : 0;
-    return binary;
   }
 
-  // ── Step 4: Silhouette = everything NOT reached from the border ──
-  const silhouette = new Uint8Array(n);
-  for (let i = 0; i < n; i++) {
-    silhouette[i] = bgReached[i] ? 0 : 1;
-  }
-  return silhouette;
+  // Aggressive morphological closing: fills ALL interior holes and smooths boundary
+  // Radius 5 is large enough to close eye sockets, teeth gaps, and decorative cutouts
+  morphologicalClose(union, width, height, 5);
+
+  return union;
 }
 
 /**
