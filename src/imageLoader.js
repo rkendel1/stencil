@@ -248,15 +248,17 @@ export function bilateralFilter(imageData, spatialSigma = 3, rangeSigma = 0.1) {
 
 /**
  * Normalize contrast using histogram stretching to maximize dynamic range.
+ * Uses 2% trimming to ignore extreme outliers (bright specular highlights and
+ * deep shadows that would otherwise compress the useful tonal range).
  * @param {Float32Array} gray - grayscale values [0,1]
  * @returns {Float32Array} normalized values [0,1]
  */
 export function normalizeContrast(gray) {
-  // Find min and max (ignoring extreme outliers - top/bottom 1%)
+  // Find min and max (ignoring extreme outliers - top/bottom 2%)
   const sorted = Float32Array.from(gray).sort();
   const n = sorted.length;
-  const minIdx = Math.floor(n * 0.01);
-  const maxIdx = Math.floor(n * 0.99);
+  const minIdx = Math.floor(n * 0.02);
+  const maxIdx = Math.floor(n * 0.98);
   const min = sorted[minIdx];
   const max = sorted[maxIdx];
   
