@@ -11,7 +11,7 @@ import { kmeans, posterize, adaptiveThreshold, toBinaryMask } from './kmeans.js'
 import { vectorize } from './vectorizer.js';
 import { validateMask, autoFix, morphologicalClose } from './validator.js';
 import { assembleShadedComposite, imageDataToBase64, generateLayerPreviews, getLayerShades } from './compositeAssembler.js';
-import { evaluateComposite, applyAICorrections, assessImageForSettings } from './aiEvaluation.js';
+import { evaluateComposite, applyAICorrections, assessImageForSettings, generateAISilhouette } from './aiEvaluation.js';
 
 // Palette of default layer colors
 const DEFAULT_COLORS = [
@@ -374,24 +374,52 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   }
 
   // ---- Step 4: Build masks ----
-  onProgress?.(4, totalSteps, 'Building clean binary masks…');
+  onProgress?.(4, totalSteps, 'Building Layer 1 silhouette with AI…');
   await tick();
 
+  // **AI-NATIVE LAYER 1 GENERATION**
+  // Replace ALL algorithmic approaches (k-means cluster union, border detection, 
+  // flood-fill) with pure AI-based subject segmentation.
+  
+  // Convert current imageData to base64 for AI
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.putImageData(imageData, 0, 0);
+  const imageBase64 = canvas.toDataURL('image/png');
+  
+  // Generate AI silhouette for Layer 1
+  let aiSilhouette = await generateAISilhouette(imageBase64, width, height);
+  
+  if (!aiSilhouette) {
+    // Fallback: if AI unavailable, use simple binary threshold
+    console.warn('AI silhouette unavailable, using threshold fallback');
+    const threshold = 0.5;
+    aiSilhouette = new Uint8Array(width * height);
+    for (let i = 0; i < gray.length; i++) {
+      aiSilhouette[i] = gray[i] < threshold ? 1 : 0;
+    }
+    morphologicalClose(aiSilhouette, width, height, 7);
+  }
+  
+  // Build k-means masks for Layers 2-N (detail layers)
+  onProgress?.(4, totalSteps, 'Building detail layer masks…');
+  await tick();
+  
   const masks = Array.from({ length: k }, () => new Uint8Array(width * height));
   for (let i = 0; i < assignments.length; i++) {
     masks[assignments[i]][i] = 1;
   }
   
-  // Clean up masks with morphological operations
+  // Clean up detail masks with morphological operations
   // Radius 1 avoids over-merging nearby features (e.g. eyes, nostrils in portraits)
   for (let i = 0; i < k; i++) {
     morphologicalClose(masks[i], width, height, 1);
   }
 
-  // Layer 1 = solid negative-space silhouette of the main subject.
-  // Identify which cluster represents the background (typically the lightest
-  // AND largest cluster that touches image borders), then union all other clusters.
-  masks[0] = _buildSilhouetteMask(masks, width, height, result);
+  // Replace masks[0] with AI-generated silhouette
+  masks[0] = aiSilhouette;
 
   // INVERT ALL MASKS: stencils are cutouts (negative space), not filled shapes.
   // 1 = stencil material (opaque), 0 = cutout (where paint passes through).
@@ -584,63 +612,9 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
  * @param {object}       kmeansResult - kmeans result with centroids array
  * @returns {Uint8Array} silhouette mask  (1 = subject, 0 = background)
  */
-function _buildSilhouetteMask(masks, width, height, kmeansResult) {
-  const k = masks.length;
-  const n = width * height;
-  const centroids = kmeansResult.centroids;
+// _buildSilhouetteMask function removed - replaced by AI-native generateAISilhouette()
+// in aiEvaluation.js. Layer 1 is now generated entirely via AI vision segmentation.
 
-  // Identify the background cluster:
-  // 1. Count how many border pixels belong to each cluster
-  // 2. Background is typically the cluster with the most border coverage
-  //    AND the lightest centroid value
-  const borderCounts = new Int32Array(k);
-  const totalCounts = new Int32Array(k);
-  
-  for (let i = 0; i < n; i++) {
-    for (let c = 0; c < k; c++) {
-      if (masks[c][i]) {
-        totalCounts[c]++;
-        const x = i % width;
-        const y = (i / width) | 0;
-        if (x === 0 || x === width - 1 || y === 0 || y === height - 1) {
-          borderCounts[c]++;
-        }
-        break; // Each pixel belongs to exactly one cluster
-      }
-    }
-  }
-
-  // Find cluster with highest border coverage percentage
-  let bgCluster = k - 1; // Default to lightest cluster
-  let maxBorderRatio = 0;
-  
-  for (let c = 0; c < k; c++) {
-    if (totalCounts[c] === 0) continue; // Skip empty clusters
-    const borderRatio = borderCounts[c] / totalCounts[c];
-    // Background cluster should have both high border ratio AND light centroid
-    if (borderRatio > maxBorderRatio && centroids[c] > 0.5) {
-      maxBorderRatio = borderRatio;
-      bgCluster = c;
-    }
-  }
-
-  // Union all non-background clusters
-  const union = new Uint8Array(n);
-  for (let c = 0; c < k; c++) {
-    if (c === bgCluster) continue; // Skip background
-    const m = masks[c];
-    for (let i = 0; i < n; i++) {
-      if (m[i]) union[i] = 1;
-    }
-  }
-
-  // Aggressive morphological closing: fills ALL interior holes (eyes, sockets, teeth,
-  // decorative cutouts) and smooths the boundary. Radius 5 creates the broadest
-  // possible base-coat silhouette.
-  morphologicalClose(union, width, height, 5);
-
-  return union;
-}
 
 /**
  * Build a small preview ImageData for a layer (mask + color tint).

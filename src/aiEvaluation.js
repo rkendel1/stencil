@@ -4,6 +4,9 @@
  * 
  * Evaluates the reconstructed composite against the original image
  * and provides structured feedback for corrections.
+ * 
+ * ALSO provides AI-native Layer 1 silhouette generation (replacing
+ * all algorithmic k-means/border-detection approaches).
  */
 
 import { removeMicroFragments, morphologicalClose } from './validator.js';
@@ -437,4 +440,188 @@ export function applyAICorrections(masks, width, height, evaluation) {
   }
 
   return applied;
+}
+
+/**
+ * AI-NATIVE LAYER 1 SILHOUETTE GENERATION
+ * 
+ * Uses Groq Vision AI to generate a negative-space silhouette mask of the
+ * main subject, completely replacing algorithmic approaches (k-means, border
+ * detection, flood-fill, morphological operations).
+ * 
+ * @param {string} imageBase64 - Base64-encoded original image (data:image/...)
+ * @param {number} width - Image width
+ * @param {number} height - Image height
+ * @returns {Promise<Uint8Array|null>} Binary mask (1=subject, 0=background) or null if AI unavailable
+ */
+export async function generateAISilhouette(imageBase64, width, height) {
+  const apiKey = await getGroqApiKey();
+  
+  if (!apiKey) {
+    console.warn('Groq API key not available. Cannot generate AI silhouette.');
+    return null;
+  }
+
+  const prompt = buildSilhouettePrompt(width, height);
+
+  try {
+    const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    const payload = {
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageBase64 } },
+          ],
+        },
+      ],
+      temperature: 0.05, // Very low for consistent segmentation
+      max_tokens: 3000,
+      response_format: { type: 'json_object' },
+    };
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Groq API error (${response.status}):`, errorText);
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices[0]?.message?.content;
+    
+    if (!content) {
+      console.error('No response from Groq API');
+      return null;
+    }
+
+    // Parse the JSON response
+    const result = JSON.parse(content);
+    
+    // Convert the AI's mask description to a binary mask
+    return await parseSilhouetteMask(result, width, height, imageBase64);
+    
+  } catch (e) {
+    console.error('AI silhouette generation failed:', e);
+    return null;
+  }
+}
+
+/**
+ * Build the prompt asking AI to identify and segment the main subject.
+ */
+function buildSilhouettePrompt(width, height) {
+  return `You are an expert image segmentation AI creating a NEGATIVE-SPACE SILHOUETTE for multi-layer airbrush stenciling.
+
+Image dimensions: ${width} × ${height} pixels.
+
+Your task: Identify the MAIN SUBJECT in this image and create a SOLID FILLED SILHOUETTE (outline + interior completely filled).
+
+This will become LAYER 1 of a multi-layer stencil, so it must:
+1. Include the ENTIRE subject (all parts, including interior regions)
+2. Be a single, continuous, FILLED shape (no holes for eyes, teeth, decorations, etc.)
+3. Exclude the background completely
+4. Have smooth, clean edges suitable for cutting
+
+Think of this like a cookie cutter shape - the broadest possible outline of the subject with everything inside filled solid.
+
+Examples:
+- Portrait of a person → solid head/shoulders silhouette (filled, no facial features cut out)
+- Sugar skull → solid skull outline filled completely (eyes, teeth, decorations all filled in)
+- Animal → complete body shape filled solid
+- Object → full object outline filled
+
+Return ONLY a JSON object with:
+{
+  "subject_description": "<brief description of what the main subject is>",
+  "confidence": <0.0-1.0, how confident you are this is the correct subject>,
+  "mask_data": "<run-length encoded binary mask: alternating run counts of 0s and 1s, starting with 0s. Format: 'R0,R1,R0,R1,...' where each R is pixel count>",
+  "bbox": {"x": <left>, "y": <top>, "width": <w>, "height": <h>}
+}
+
+CRITICAL: mask_data must be run-length encoded (RLE) to fit in token limit.
+Total pixels = ${width * height}. Start with background (0), alternate to subject (1).
+
+Example RLE for a 10×10 image with centered 4×4 subject:
+- First 23 pixels are background (0)
+- Next 4 pixels are subject (1)  
+- Next 2 pixels are background (0)
+- Next 4 pixels are subject (1)
+- ... continuing the pattern
+→ "23,4,2,4,2,4,2,4,45"`;
+}
+
+/**
+ * Parse the AI's silhouette response into a binary mask.
+ * 
+ * @param {Object} result - AI response with mask_data (RLE encoded)
+ * @param {number} width - Image width
+ * @param {number} height - Image height  
+ * @param {string} imageBase64 - Original image for fallback analysis
+ * @returns {Promise<Uint8Array>} Binary mask (1=subject, 0=background)
+ */
+async function parseSilhouetteMask(result, width, height, imageBase64) {
+  const n = width * height;
+  const mask = new Uint8Array(n);
+  
+  try {
+    if (!result.mask_data) {
+      throw new Error('No mask_data in AI response');
+    }
+
+    // Decode run-length encoding
+    const runs = result.mask_data.split(',').map(r => parseInt(r.trim(), 10));
+    let idx = 0;
+    let value = 0; // Start with background (0)
+    
+    for (const runLength of runs) {
+      for (let i = 0; i < runLength && idx < n; i++) {
+        mask[idx++] = value;
+      }
+      value = 1 - value; // Alternate between 0 and 1
+    }
+    
+    // Fill remaining pixels if RLE was shorter than expected
+    while (idx < n) {
+      mask[idx++] = 0; // Background
+    }
+    
+    // Apply gentle morphological closing to smooth edges
+    morphologicalClose(mask, width, height, 3);
+    
+    console.log(`✅ AI silhouette: ${result.subject_description} (confidence: ${(result.confidence * 100).toFixed(0)}%)`);
+    
+    return mask;
+    
+  } catch (e) {
+    console.error('Failed to parse AI silhouette mask:', e);
+    console.error('AI response:', result);
+    
+    // Fallback: try to use bounding box if available
+    if (result.bbox) {
+      console.warn('Using bbox fallback for silhouette');
+      const { x, y, width: w, height: h } = result.bbox;
+      for (let py = 0; py < height; py++) {
+        for (let px = 0; px < width; px++) {
+          if (px >= x && px < x + w && py >= y && py < y + h) {
+            mask[py * width + px] = 1;
+          }
+        }
+      }
+      morphologicalClose(mask, width, height, 5);
+      return mask;
+    }
+    
+    throw e;
+  }
 }
