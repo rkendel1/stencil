@@ -56,11 +56,10 @@ export default function handler(req, res) {
     });
   }
   
-  // Set CORS headers to allow same-origin requests
-  res.setHeader('Access-Control-Allow-Origin', origin || `https://${host}`);
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  // Set CORS headers only for same-origin
+  // Don't set CORS headers - same-origin requests don't need them
+  // and we've already validated the origin above
   
-  // Return the API key (only to authorized origins)
+  // Return the API key (only to validated same-origin requests)
   res.status(200).json({ apiKey });
 }

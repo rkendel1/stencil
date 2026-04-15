@@ -28,9 +28,7 @@ This tool generates **multi-layer airbrush stencils** used for:
 - Notice how the **white areas are the stencil** (masked off) and **colored areas are where paint is sprayed**
 - Each layer adds specific detail without destroying previous work
 
-The AI evaluates:
-
-The AI evaluates:
+### What the AI Evaluates
 
 - **Airbrush sequencing** - Will layers build up properly when airbrushed in order?
 - **Overspray prevention** - Are there gaps where paint can bleed through?

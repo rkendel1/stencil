@@ -274,6 +274,7 @@ export async function runPipeline(imageData, settings, onProgress) {
       console.error('AI evaluation failed:', error);
       // Continue without AI evaluation
       for (let i = 0; i < layers.length; i++) {
+        if (!layers[i].warnings) layers[i].warnings = [];
         layers[i].warnings.push('AI evaluation unavailable');
       }
     }
