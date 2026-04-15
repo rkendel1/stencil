@@ -170,7 +170,8 @@ async function applyImage(img, width, height, name) {
   const { imageData, scale } = imageToData(img, MAX_PROCESSING_DIM);
   state.imageData = imageData;
   
-  // Store original image data for AI comparison (at processing resolution)
+  // Store original image data for AI comparison at processing resolution
+  // (AI compares at the same resolution as pipeline processing for accurate evaluation)
   state.originalImageData = imageData;
   
   state.layers    = [];

@@ -33,13 +33,10 @@ The standard 7-step pipeline is extended to 9 steps when AI evaluation is enable
 
 Before AI evaluation, we create a **shaded composite** by:
 
-1. Assigning shade values to each layer (evenly spaced increments)
-   - Layer 1: 0.15 (darkest)
-   - Layer 2: 0.30
-   - Layer 3: 0.45
-   - Layer 4: 0.60
-   - Layer 5: 0.75
-   - Layer 6: 0.90 (lightest)
+1. Assigning shade values to each layer (evenly spaced increments using formula: `(i + 1) / (numLayers + 1)`)
+   - For 6 layers: 0.143, 0.286, 0.429, 0.571, 0.714, 0.857
+   - Layer 1 = darkest shade
+   - Layer N = lightest shade
 
 2. Creating a composite image where each pixel value is the sum of all layer contributions
 3. Converting the result to a grayscale ImageData for comparison with the original

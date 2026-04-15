@@ -18,10 +18,7 @@ export function assembleShadedComposite(masks, width, height) {
   const numLayers = masks.length;
   
   // Calculate evenly spaced shade values (darkest to lightest)
-  // For 6 layers: [0.15, 0.30, 0.45, 0.60, 0.75, 0.90]
-  const shades = Array.from({ length: numLayers }, (_, i) => 
-    (i + 1) / (numLayers + 1)
-  );
+  const shades = getLayerShades(numLayers);
   
   // Create composite grayscale image
   const composite = new Float32Array(width * height);
