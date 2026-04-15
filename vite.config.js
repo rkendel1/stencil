@@ -14,7 +14,7 @@ export default defineConfig({
       output: {
         manualChunks: {
           // Split large dependencies into separate chunks
-          'opencv': ['opencv.js'],
+          'opencv': ['@techstark/opencv-js'],
         }
       }
     },
@@ -34,8 +34,8 @@ export default defineConfig({
   },
   // Optimize dependencies
   optimizeDeps: {
-    include: [],
-    exclude: ['opencv.js'],
+    include: ['@techstark/opencv-js'],
+    exclude: [],
     esbuildOptions: {
       // Treat Node.js built-ins as external in browser context
       platform: 'browser'

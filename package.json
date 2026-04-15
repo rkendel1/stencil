@@ -10,7 +10,7 @@
     "start": "vite"
   },
   "dependencies": {
-    "opencv.js": "^1.2.1",
+    "@techstark/opencv-js": "^4.9.0-release.1",
     "potrace": "^2.1.8",
     "jimp": "^0.22.10"
   },

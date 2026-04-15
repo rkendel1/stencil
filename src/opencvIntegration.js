@@ -1,40 +1,42 @@
 /**
  * opencvIntegration.js
  * Integration wrapper for OpenCV.js with fallback to custom implementations
+ * Using @techstark/opencv-js (legitimate, verified package)
  */
 
 let cv = null;
 let cvReady = false;
 
 /**
- * Initialize OpenCV.js
+ * Initialize OpenCV.js from legitimate source
  * @returns {Promise<boolean>} true if loaded successfully
  */
 export async function initOpenCV() {
   if (cvReady) return true;
   
   try {
-    // Import OpenCV.js
-    const opencvModule = await import('opencv.js');
-    cv = opencvModule.default || opencvModule;
+    // Import legitimate OpenCV.js from @techstark/opencv-js
+    const { cv: opencv } = await import('@techstark/opencv-js');
+    cv = opencv;
     
     // Wait for OpenCV to be ready
-    await new Promise((resolve) => {
-      if (cv.onRuntimeInitialized) {
-        cv.onRuntimeInitialized = () => {
-          cvReady = true;
-          resolve();
-        };
-      } else {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('OpenCV.js initialization timeout'));
+      }, 10000); // 10 second timeout
+      
+      cv['onRuntimeInitialized'] = () => {
+        clearTimeout(timeout);
         cvReady = true;
+        console.log('✅ OpenCV.js (verified package) loaded successfully');
         resolve();
-      }
+      };
     });
     
-    console.log('OpenCV.js loaded successfully');
     return true;
   } catch (error) {
     console.warn('OpenCV.js failed to load, using fallback implementations:', error);
+    cvReady = false;
     return false;
   }
 }
