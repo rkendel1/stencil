@@ -454,6 +454,41 @@ header .btn-header:hover { background: var(--surface2); }
   gap: 4px; line-height: 1.4;
 }
 .warn-item::before { content: '⚠'; flex-shrink: 0; }
+.warn-item.warn-info {
+  color: var(--accent);
+  background: rgba(139,92,246,.08);
+  border-radius: 3px;
+  padding: 2px 4px;
+  margin-bottom: 2px;
+}
+.warn-item.warn-info::before { content: ''; }
+.warn-item.warn-tip {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.warn-item.warn-tip::before { content: ''; }
+
+/* Fix All button in layers header */
+.btn-fix-all {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.btn-fix-all:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-fix-all:disabled {
+  border-color: var(--border);
+  color: var(--text-dim);
+  cursor: default;
+}
 
 /* ===== FOOTER ===== */
 footer {

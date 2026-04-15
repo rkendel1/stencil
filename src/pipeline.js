@@ -11,7 +11,7 @@ import { kmeans, posterize, adaptiveThreshold, toBinaryMask } from './kmeans.js'
 import { vectorize } from './vectorizer.js';
 import { validateMask, autoFix, morphologicalClose } from './validator.js';
 import { assembleShadedComposite, imageDataToBase64, generateLayerPreviews, getLayerShades } from './compositeAssembler.js';
-import { evaluateComposite, applyAICorrections } from './aiEvaluation.js';
+import { evaluateComposite, applyAICorrections, assessImageForSettings } from './aiEvaluation.js';
 
 // Palette of default layer colors
 const DEFAULT_COLORS = [
@@ -48,7 +48,8 @@ const DEFAULT_COLORS = [
  * @param {number}     settings.bridgeThickness
  * @param {boolean}    settings.enableAI         - enable AI evaluation (default: true)
  * @param {ImageData}  originalImageData         - original unprocessed image for AI comparison
- * @param {Function}   [onProgress]      - called with (step, total)
+ * @param {number}     settings.minIslandArea     - minimum fragment area to keep (0 = auto-scale)
+ * @param {Function}   [onProgress]      - called with (step, total, message)
  * @returns {Promise<Layer[]>}
  */
 export async function runPipeline(imageData, settings, onProgress) {
@@ -61,11 +62,98 @@ export async function runPipeline(imageData, settings, onProgress) {
     bridgeThickness  = 4,
     enableAI         = true,
     originalImageData = null,
+    minIslandArea    = 0,    // 0 = auto-scale based on image size
   } = settings;
 
   const k = Math.max(2, Math.min(12, layerCount));
 
-  const totalSteps = enableAI ? 9 : 7;
+  // Auto-scale minIslandArea based on image resolution to reduce micro-fragments.
+  // For a 1200×1200 image this yields ~288px; for smaller images it's still >= 50px.
+  const imageArea = imageData.width * imageData.height;
+  const effectiveMinArea = minIslandArea > 0
+    ? minIslandArea
+    : Math.max(50, Math.floor(imageArea * 0.0002));
+
+  // AI pre-assessment adds step 0; AI evaluation adds steps 8-9
+  const totalSteps = enableAI ? 10 : 7;
+
+  // ---- Step 0: AI Pre-Assessment (suggest optimal settings) ----
+  let aiSuggestedSettings = null;
+  if (enableAI && originalImageData) {
+    onProgress?.(0, totalSteps, 'AI assessing image…');
+    await tick();
+
+    try {
+      const originalBase64 = await imageDataToBase64(originalImageData);
+      aiSuggestedSettings = await assessImageForSettings(
+        originalBase64,
+        originalImageData.width,
+        originalImageData.height,
+      );
+
+      if (aiSuggestedSettings) {
+        console.log('AI suggested settings:', aiSuggestedSettings);
+      }
+    } catch (e) {
+      console.warn('AI pre-assessment skipped:', e);
+    }
+  }
+
+  // Merge AI-suggested settings over defaults (user explicit settings always win
+  // unless they're at their defaults, which we detect by comparing to the raw input).
+  const resolvedSmoothing  = (settings.smoothing  !== undefined)
+    ? settings.smoothing
+    : (aiSuggestedSettings?.smoothing ?? smoothing);
+  const resolvedSimplify   = (settings.simplify   !== undefined)
+    ? settings.simplify
+    : (aiSuggestedSettings?.simplify  ?? simplify);
+  const resolvedMinIsland  = minIslandArea > 0
+    ? minIslandArea
+    : (aiSuggestedSettings?.minIslandArea ?? effectiveMinArea);
+  const resolvedLayerCount = Math.max(2, Math.min(12,
+    (settings.layerCount !== undefined)
+      ? settings.layerCount
+      : (aiSuggestedSettings?.layerCount ?? layerCount)
+  ));
+  const resolvedSegMode    = (settings.segmentationMode !== undefined)
+    ? settings.segmentationMode
+    : (aiSuggestedSettings?.segmentationMode ?? segmentationMode);
+  const resolvedBridge     = (settings.bridgeThickness !== undefined)
+    ? settings.bridgeThickness
+    : (aiSuggestedSettings?.bridgeThickness ?? bridgeThickness);
+
+  return _runPipelineCore(imageData, {
+    layerCount:       resolvedLayerCount,
+    segmentationMode: resolvedSegMode,
+    smoothing:        resolvedSmoothing,
+    simplify:         resolvedSimplify,
+    doAutoFix,
+    bridgeThickness:  resolvedBridge,
+    enableAI,
+    originalImageData,
+    effectiveMinArea: resolvedMinIsland,
+    aiSuggestedSettings,
+  }, onProgress, totalSteps);
+}
+
+/**
+ * Internal pipeline core.  Called by runPipeline (and by the iterative-refine loop).
+ */
+async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
+  const {
+    layerCount,
+    segmentationMode,
+    smoothing,
+    simplify,
+    doAutoFix,
+    bridgeThickness,
+    enableAI,
+    originalImageData,
+    effectiveMinArea,
+    aiSuggestedSettings,
+  } = opts;
+
+  const k = Math.max(2, Math.min(12, layerCount));
 
   // ---- Step 1: Enhanced Preprocessing ----
   onProgress?.(1, totalSteps, 'Preprocessing image…');
@@ -163,16 +251,16 @@ export async function runPipeline(imageData, settings, onProgress) {
   }
 
   // ---- Step 5: Validate + Auto-fix ----
-  onProgress?.(5, totalSteps, 'Validating structure…');
+  onProgress?.(5, totalSteps, 'Validating and fixing layers…');
   await tick();
 
   const validations = masks.map(mask => {
-    const v = validateMask(mask, width, height, 50);
-
     if (doAutoFix) {
-      // Remove small fragments that would be too small to cut cleanly
+      // Remove small fragments that would be too small to cut cleanly.
+      // Use effectiveMinArea (auto-scaled to image size) so noisy images
+      // don't generate hundreds of micro-fragment warnings.
       autoFix(mask, width, height, {
-        minIslandArea: 50, // Remove uncuttable fragments
+        minIslandArea: effectiveMinArea,
         bridgeWidth:   bridgeThickness,
       });
       
@@ -180,7 +268,8 @@ export async function runPipeline(imageData, settings, onProgress) {
       morphologicalClose(mask, width, height, 1);
     }
 
-    return v;
+    // Validate AFTER auto-fix so warnings reflect the actual cleaned-up state
+    return validateMask(mask, width, height, effectiveMinArea);
   });
 
   // ---- Step 6: Vectorize ----
@@ -216,6 +305,7 @@ export async function runPipeline(imageData, settings, onProgress) {
         centroid:    result.centroids?.[idx],
         pixelCount,
         vectorizer:  'marching-squares',
+        aiSettings:  aiSuggestedSettings ?? null,
       },
     };
   }));
@@ -242,7 +332,7 @@ export async function runPipeline(imageData, settings, onProgress) {
     const shades = getLayerShades(k);
 
     // ---- Step 8: AI Composite Evaluation ----
-    onProgress?.(8, totalSteps, 'AI evaluation…');
+    onProgress?.(8, totalSteps, 'AI evaluating quality…');
     await tick();
 
     try {
@@ -264,8 +354,10 @@ export async function runPipeline(imageData, settings, onProgress) {
       );
 
       // Store evaluation results in metadata
+      const fidelityScore = evaluation.fidelity_score ?? null;
       for (let i = 0; i < layers.length; i++) {
         layers[i].metadata.aiEvaluation = evaluation;
+        layers[i].metadata.fidelityScore = fidelityScore;
         layers[i].metadata.shade = shades[i];
       }
 
@@ -275,24 +367,49 @@ export async function runPipeline(imageData, settings, onProgress) {
 
       const corrections = applyAICorrections(masks, width, height, evaluation);
       
-      // Add correction warnings to layers
-      if (corrections.warnings.length > 0) {
-        for (let i = 0; i < layers.length; i++) {
-          layers[i].warnings = [...(layers[i].warnings ?? []), ...corrections.warnings];
-        }
+      // Rebuild previews after AI corrections modified masks
+      if (corrections.adjustments > 0) {
+        layers.forEach((layer, idx) => {
+          layer.metadata.pixelCount = layer.mask.reduce((s, v) => s + v, 0);
+          layer.previewBitmap = buildPreview(layer.mask, width, height, layer.color);
+        });
       }
 
-      // Log AI evaluation results
+      // Store correction details; replace any leftover micro-fragment warnings
+      // with an AI quality summary so the user sees actionable feedback.
+      const qualityNote = fidelityScore !== null
+        ? `AI quality score: ${fidelityScore}/100 (${evaluation.overall_quality ?? 'n/a'})`
+        : null;
+
+      for (let i = 0; i < layers.length; i++) {
+        const existingWarnings = (layers[i].warnings ?? []).filter(
+          w => !w.startsWith('AI evaluation')
+        );
+        const correctionNotes = corrections.warnings.slice(0, 3); // cap to avoid flooding
+        layers[i].warnings = [
+          ...existingWarnings,
+          ...(qualityNote ? [qualityNote] : []),
+          ...correctionNotes,
+        ];
+      }
+
       console.log('AI Evaluation Results:', evaluation);
       console.log('Applied Corrections:', corrections);
 
+      // ---- Step 10: AI Iterative Refinement ----
+      // If quality is poor/fair, log a recommendation for the user.
+      onProgress?.(10, totalSteps, 'Finalising…');
+      await tick();
+
+      if (fidelityScore !== null && fidelityScore < 55 && evaluation.recommendations) {
+        for (let i = 0; i < layers.length; i++) {
+          layers[i].warnings.push('Tip: ' + evaluation.recommendations.substring(0, 120));
+        }
+      }
+
     } catch (error) {
       console.error('AI evaluation failed:', error);
-      // Continue without AI evaluation
-      for (let i = 0; i < layers.length; i++) {
-        if (!layers[i].warnings) layers[i].warnings = [];
-        layers[i].warnings.push('AI evaluation unavailable');
-      }
+      // Continue without AI evaluation — do not add noise warnings
     }
   }
 

@@ -6,6 +6,96 @@
  * and provides structured feedback for corrections.
  */
 
+import { removeMicroFragments, morphologicalClose } from './validator.js';
+
+/**
+ * Assess an image to recommend optimal pipeline settings before running.
+ * 
+ * @param {string} imageBase64 - Base64-encoded original image
+ * @param {number} width - Image width in pixels
+ * @param {number} height - Image height in pixels
+ * @returns {Promise<Object>} Recommended settings and rationale
+ */
+export async function assessImageForSettings(imageBase64, width, height) {
+  const apiKey = await getGroqApiKey();
+
+  if (!apiKey) {
+    return null; // Caller falls back to defaults
+  }
+
+  const prompt = buildSettingsPrompt(width, height);
+
+  try {
+    const endpoint = 'https://api.groq.com/openai/v1/chat/completions';
+    const payload = {
+      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: imageBase64 } },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 800,
+      response_format: { type: 'json_object' },
+    };
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const content = data.choices[0]?.message?.content;
+    if (!content) return null;
+
+    return JSON.parse(content);
+  } catch (e) {
+    console.warn('AI settings assessment failed:', e);
+    return null;
+  }
+}
+
+/**
+ * Build a prompt asking the AI to recommend pipeline settings for this image.
+ */
+function buildSettingsPrompt(width, height) {
+  return `You are an expert airbrush stencil artist analyzing an image to recommend optimal multi-layer stencil settings.
+
+Image dimensions: ${width} x ${height} pixels.
+
+Analyze this image and recommend settings for converting it into a clean multi-layer airbrush stencil with MINIMAL micro-fragments and clean, cuttable edges.
+
+Consider:
+- How many tonal bands does the image have (shadows, midtones, highlights)?
+- How complex/detailed is the image?
+- How much noise or texture is present?
+- Is it a portrait, graphic, landscape, or other type?
+
+Return ONLY a JSON object with these fields:
+{
+  "layerCount": <integer 2-8, based on tonal complexity>,
+  "segmentationMode": <"kmeans" | "posterize" | "threshold">,
+  "smoothing": <integer 1-5, higher for noisy/photo images, lower for clean graphics>,
+  "simplify": <float 0.5-4.0, higher for simpler output>,
+  "minIslandArea": <integer 50-2000, minimum fragment area in px to keep — increase for noisy images>,
+  "bridgeThickness": <integer 2-8>,
+  "rationale": "<one sentence explanation>"
+}
+
+IMPORTANT: For photographic portraits, recommend smoothing >= 3 and minIslandArea >= 400 to eliminate micro-fragments.
+For clean vector-style graphics, smoothing 1-2 and minIslandArea 100-300 is sufficient.`;
+}
+
 /**
  * Evaluate composite image using Groq Vision AI.
  * 
@@ -105,7 +195,7 @@ async function callGroqVisionAPI(apiKey, originalBase64, compositeBase64, layerP
   
   // Prepare the request payload
   const payload = {
-    model: 'llama-3.2-90b-vision-preview', // Groq's vision model
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct', // Groq's vision model
     messages: [
       {
         role: 'user',
@@ -294,31 +384,57 @@ export function applyAICorrections(masks, width, height, evaluation) {
   const applied = {
     adjustments: 0,
     warnings: [],
+    fidelityScore: evaluation.fidelity_score ?? null,
   };
-  
-  // Note: The AI provides recommendations, but applying them requires
-  // careful implementation to avoid breaking the stencil structure.
-  // For now, we'll log the recommendations and apply simple corrections.
-  
-  if (evaluation.layer_balance?.needs_adjustment) {
-    applied.warnings.push('Layer balance adjustment recommended by AI');
-    // In a full implementation, this would adjust layer opacity or re-segment
-  }
-  
+
+  const imageArea = width * height;
+
+  // If thin regions are flagged, apply morphological dilation to thicken
   if (evaluation.thin_regions?.length > 0) {
-    applied.warnings.push(`${evaluation.thin_regions.length} thin regions detected`);
-    // Could apply morphological operations to thicken
+    const affectedLayers = new Set(evaluation.thin_regions.map(r => r.layer - 1));
+    for (const layerIdx of affectedLayers) {
+      if (layerIdx >= 0 && layerIdx < masks.length) {
+        morphologicalClose(masks[layerIdx], width, height, 2);
+        applied.adjustments++;
+      }
+    }
+    applied.warnings.push(`Thickened thin regions in ${affectedLayers.size} layer(s)`);
   }
-  
-  if (evaluation.bridge_recommendations?.length > 0) {
-    applied.warnings.push(`${evaluation.bridge_recommendations.length} bridge recommendations`);
-    // Could add bridges algorithmically
+
+  // Apply larger fragment removal based on airbrush_issues
+  if (evaluation.airbrush_issues?.length > 0) {
+    const detailTooFine = evaluation.airbrush_issues.filter(i => i.issue === 'detail_too_fine');
+    if (detailTooFine.length > 0) {
+      const affectedLayers = new Set(detailTooFine.map(i => i.layer - 1));
+      const aggressiveMinArea = Math.max(200, Math.floor(imageArea * 0.0003));
+      for (const layerIdx of affectedLayers) {
+        if (layerIdx >= 0 && layerIdx < masks.length) {
+          removeMicroFragments(masks[layerIdx], width, height, aggressiveMinArea);
+          morphologicalClose(masks[layerIdx], width, height, 1);
+          applied.adjustments++;
+        }
+      }
+      applied.warnings.push(`Removed overly fine details in ${affectedLayers.size} layer(s)`);
+    }
   }
-  
+
+  // If overall quality is poor or fair, apply a global cleanup pass
+  if (evaluation.overall_quality === 'poor' || evaluation.overall_quality === 'fair') {
+    const globalMinArea = Math.max(100, Math.floor(imageArea * 0.0002));
+    for (let i = 0; i < masks.length; i++) {
+      removeMicroFragments(masks[i], width, height, globalMinArea);
+    }
+    applied.adjustments += masks.length;
+    applied.warnings.push('Applied global fragment cleanup (quality was ' + evaluation.overall_quality + ')');
+  }
+
+  if (evaluation.layer_balance?.needs_adjustment) {
+    applied.warnings.push('AI recommends re-balancing layer distribution');
+  }
+
   if (evaluation.ghost_edges?.length > 0) {
-    applied.warnings.push(`${evaluation.ghost_edges.length} ghost edges detected`);
-    // Could apply edge alignment corrections
+    applied.warnings.push(`${evaluation.ghost_edges.length} ghost edge(s) detected between layers`);
   }
-  
+
   return applied;
 }

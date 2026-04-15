@@ -4,7 +4,7 @@
  */
 
 import { loadFromFile, loadFromURL, imageToData } from './imageLoader.js';
-import { runPipeline } from './pipeline.js';
+import { runPipeline, updateLayerColor } from './pipeline.js';
 import {
   initUI, renderLayerPanel, setOriginalImage,
   setViewMode, resizeCanvas, redraw,
@@ -13,6 +13,7 @@ import {
 import {
   exportSVG, exportPNG, exportPDF, exportEPS, exportAll,
 } from './exporter.js';
+import { removeMicroFragments, morphologicalClose, validateMask } from './validator.js';
 
 // ---- Application state ----
 let state = {
@@ -41,6 +42,7 @@ const autoFixToggle = $('auto-fix');
 const enableAIToggle = $('enable-ai');
 const regMarks      = $('reg-marks');
 const bridgeThick   = $('bridge-thickness');
+const aiStatusEl    = $('ai-status');
 
 // Export buttons
 const btnSVG     = $('btn-export-svg');
@@ -48,6 +50,9 @@ const btnPDF     = $('btn-export-pdf');
 const btnPNG     = $('btn-export-png');
 const btnAll     = $('btn-export-all');
 const btnOptions = $('btn-export-options');
+
+// Layers panel
+const btnFixAll  = $('btn-fix-all-layers');
 
 // Modal
 const modalOverlay = $('modal-overlay');
@@ -75,6 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupLayerListEvents();
   setupKeyboardShortcuts();
   setupMobileNav();
+  setupFixAllBtn();
 
   // Focus the drop zone for keyboard users
   dropZone.focus();
@@ -213,7 +219,9 @@ async function generateLayers() {
   state.processing = true;
   generateBtn.disabled = true;
   generateBtn.textContent = '⏳ Processing…';
+  if (aiStatusEl) aiStatusEl.textContent = '';
 
+  const enableAI = enableAIToggle.checked;
   const settings = {
     layerCount:       parseInt(layerCount.value, 10) || 4,
     segmentationMode: segMode.value,
@@ -221,7 +229,7 @@ async function generateLayers() {
     simplify:         parseFloat(simplify.value),
     autoFix:          autoFixToggle.checked,
     bridgeThickness:  parseInt(bridgeThick.value, 10) || 4,
-    enableAI:         enableAIToggle.checked,
+    enableAI,
     originalImageData: state.originalImageData,
   };
 
@@ -231,12 +239,36 @@ async function generateLayers() {
       settings,
       (step, total, msg) => {
         setProgress(step, total);
-        setStatus(msg ?? `Step ${step}/${total}`);
+        if (step === 0) {
+          setStatus('🤖 ' + (msg ?? 'AI assessing image…'));
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 AI is analysing your image…';
+        } else if (step === 8 || step === 9) {
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + (msg ?? '');
+          setStatus(msg ?? `Step ${step}/${total}`);
+        } else {
+          if (aiStatusEl && aiStatusEl.textContent.startsWith('🤖 AI is analysing')) {
+            aiStatusEl.textContent = '';
+          }
+          setStatus(msg ?? `Step ${step}/${total}`);
+        }
       }
     );
 
     state.layers = layers;
     renderLayerPanel(layers);
+    if (btnFixAll) btnFixAll.disabled = false;
+
+    // Show AI quality score in the status area
+    const fidelityScore = layers[0]?.metadata?.fidelityScore;
+    const aiEval = layers[0]?.metadata?.aiEvaluation;
+    if (fidelityScore !== null && fidelityScore !== undefined && aiEval && !aiEval.skipped) {
+      const quality = aiEval.overall_quality ?? '';
+      if (aiStatusEl) {
+        aiStatusEl.textContent = `🤖 AI score: ${fidelityScore}/100 — ${quality}`;
+      }
+    } else if (aiEval?.skipped) {
+      if (aiStatusEl) aiStatusEl.textContent = '';
+    }
 
     // Resize canvas to match processing resolution
     resizeCanvas(state.imageData.width, state.imageData.height);
@@ -253,12 +285,52 @@ async function generateLayers() {
     console.error(err);
     toast('Generation failed: ' + err.message, 'error');
     setStatus('Generation failed');
+    if (aiStatusEl) aiStatusEl.textContent = '';
   } finally {
     state.processing = false;
     generateBtn.disabled = false;
     generateBtn.textContent = '⚡ Generate Layers';
-    setProgress(7, 7); // complete
+    setProgress(enableAI ? 10 : 7, enableAI ? 10 : 7); // complete
   }
+}
+
+// ---- Fix All Layers ----
+
+function setupFixAllBtn() {
+  if (!btnFixAll) return;
+  btnFixAll.addEventListener('click', () => {
+    if (!state.layers.length) return;
+    fixAllLayers();
+  });
+}
+
+/**
+ * Apply aggressive micro-fragment removal to all layers to clear warnings.
+ * Uses a higher minIslandArea than the default to clean up any remaining noise.
+ */
+function fixAllLayers() {
+  if (!state.layers.length || !state.imageData) return;
+
+  const { width, height } = state.imageData;
+  const imageArea = width * height;
+  // Use a more aggressive threshold for manual fix — 2× the auto-scale amount
+  const aggressiveMin = Math.max(100, Math.floor(imageArea * 0.0004));
+
+  state.layers.forEach(layer => {
+    removeMicroFragments(layer.mask, width, height, aggressiveMin);
+    morphologicalClose(layer.mask, width, height, 1);
+    layer.metadata.pixelCount = layer.mask.reduce((s, v) => s + v, 0);
+    // Re-validate to get updated warnings
+    const v = validateMask(layer.mask, width, height, aggressiveMin);
+    layer.warnings = v.warnings;
+    // Rebuild the preview thumbnail
+    updateLayerColor(layer, layer.color);
+  });
+
+  renderLayerPanel(state.layers);
+  redraw();
+  toast('All layers cleaned up', 'success', 2500);
+  setStatus('Layers fixed — warnings cleared');
 }
 
 // ---- View tabs ----

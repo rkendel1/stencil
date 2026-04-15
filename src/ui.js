@@ -52,11 +52,54 @@ export function renderLayerPanel(layers) {
     return;
   }
 
+  // Show AI quality score banner if available
+  const fidelityScore = layers[0]?.metadata?.fidelityScore ?? null;
+  const aiEval = layers[0]?.metadata?.aiEvaluation;
+  if (fidelityScore !== null && aiEval) {
+    const banner = buildAIScoreBanner(fidelityScore, aiEval);
+    list.appendChild(banner);
+  }
+
   layers.forEach((layer, idx) => {
     const card = buildLayerCard(layer, idx);
     list.appendChild(card);
   });
 }
+
+/**
+ * Build an AI quality score banner for the top of the layers panel.
+ */
+function buildAIScoreBanner(score, evaluation) {
+  const banner = document.createElement('div');
+  const quality = evaluation.overall_quality ?? 'unknown';
+  const color = score >= 80 ? 'var(--accent-green, #27ae60)'
+    : score >= 60 ? 'var(--accent-yellow, #f5a623)'
+    : 'var(--warn-color, #e67e22)';
+
+  banner.style.cssText = `
+    display:flex; align-items:center; gap:8px; padding:8px 10px;
+    margin-bottom:6px; border-radius:6px;
+    background:color-mix(in srgb, ${color} 15%, transparent);
+    border:1px solid color-mix(in srgb, ${color} 40%, transparent);
+    font-size:11px; color:var(--text-main);
+  `;
+
+  const scoreEl = document.createElement('span');
+  scoreEl.style.cssText = `font-size:18px; font-weight:700; color:${color};`;
+  scoreEl.textContent = score;
+
+  const label = document.createElement('div');
+  label.style.cssText = 'flex:1; line-height:1.4;';
+  label.innerHTML = `<strong>AI Quality Score</strong><br>
+    <span style="color:var(--text-dim)">
+      ${quality.charAt(0).toUpperCase() + quality.slice(1)} · 
+      ${evaluation.airbrush_ready ? '✓ Airbrush ready' : '⚠ Needs attention'}
+    </span>`;
+
+  banner.append(scoreEl, document.createTextNode('/100'), label);
+  return banner;
+}
+
 
 /**
  * Build the DOM element for a layer card.
@@ -101,7 +144,11 @@ function buildLayerCard(layer, idx) {
   const meta = document.createElement('div');
   meta.className = 'layer-meta';
   const px = layer.metadata.pixelCount ?? 0;
-  meta.textContent = `${formatNum(px)} px · ${layer.warnings?.length ? `⚠ ${layer.warnings.length} warn` : '✓ ok'}`;
+  // Filter out AI-quality notes from warning count (they're informational, not problems)
+  const realWarnings = (layer.warnings ?? []).filter(
+    w => !w.startsWith('AI quality score:') && !w.startsWith('Tip:')
+  );
+  meta.textContent = `${formatNum(px)} px · ${realWarnings.length ? `⚠ ${realWarnings.length} warn` : '✓ ok'}`;
 
   info.append(name, meta);
 
@@ -192,8 +239,17 @@ function buildLayerCard(layer, idx) {
     warningsEl.className = 'layer-warnings';
     for (const w of layer.warnings) {
       const d = document.createElement('div');
-      d.className   = 'warn-item';
-      d.textContent = w;
+      // AI quality notes get a distinct style
+      if (w.startsWith('AI quality score:')) {
+        d.className = 'warn-item warn-info';
+        d.textContent = '🤖 ' + w;
+      } else if (w.startsWith('Tip:')) {
+        d.className = 'warn-item warn-tip';
+        d.textContent = '💡 ' + w.slice(4).trim();
+      } else {
+        d.className = 'warn-item';
+        d.textContent = w;
+      }
       warningsEl.appendChild(d);
     }
   }

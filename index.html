@@ -125,6 +125,8 @@
         ⚡ Generate Layers
       </button>
 
+      <div id="ai-status" aria-live="polite" style="font-size:11px;color:var(--text-dim);margin-top:4px;min-height:16px;"></div>
+
       <div id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
         <div id="progress-fill"></div>
       </div>
@@ -172,6 +174,10 @@
   <aside id="sidebar-right" aria-label="Layers panel">
     <div id="layers-header">
       <h3>Layers</h3>
+      <button type="button" id="btn-fix-all-layers" class="btn-fix-all" disabled
+              aria-label="Fix all layer warnings automatically" title="Auto-fix micro-fragments in all layers">
+        ✨ Fix All
+      </button>
     </div>
     <div id="layers-list" role="list" aria-label="Stencil layers">
       <p id="layers-empty-msg" aria-live="polite" style="text-align:center;color:var(--text-dim);font-size:11px;padding:24px 8px;line-height:1.6;">
