@@ -393,8 +393,18 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   // holes or detail cuts (like the left panel of a two-layer skull stencil set).
   // Union all subject clusters + aggressive morphological closing fills ALL holes.
   masks[0] = _buildSilhouetteMask(masks, width, height);
+
+  // INVERT ALL MASKS: stencils are cutouts (negative space), not filled shapes.
+  // 1 = stencil material (opaque), 0 = cutout (where paint passes through).
+  for (let i = 0; i < k; i++) {
+    const mask = masks[i];
+    for (let j = 0; j < mask.length; j++) {
+      mask[j] = mask[j] ? 0 : 1;
+    }
+  }
+
   // Clear the background cluster (lightest centroid = masks[k-1]) so it sorts
-  // last and the silhouette is guaranteed to become Layer 1.
+  // last. Do this AFTER inversion so it stays all-0 (fully transparent/cutout).
   masks[k - 1] = new Uint8Array(width * height);
 
   // ---- Step 5: Validate + Auto-fix ----
@@ -565,21 +575,19 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
 /**
  * Build a solid outer silhouette mask suitable for Layer 1 (base coat).
  *
- * This produces the "left panel" of a layered stencil set: a completely filled,
- * hole-free shape of the subject with no internal cutouts.  Subsequent layers
- * add progressively finer detail on top.
+ * This produces the broadest possible filled silhouette by unioning all subject
+ * clusters and applying aggressive morphological closing to fill ALL interior holes.
+ * The global inversion step (applied to all masks) will convert this to a cutout.
  *
  * Algorithm:
  *   1. Union all subject k-means clusters (masks[0..k-2]; masks[k-1] is background)
  *   2. Apply aggressive morphological closing (radius 5) to fill ALL interior holes
- *      (eyes, teeth, decorations) and smooth the outer boundary
- *   3. This produces the simplest possible solid silhouette — just the broad
- *      outer shape with zero internal detail
+ *      (eyes, teeth, decorations) creating the broadest possible silhouette
  *
  * @param {Uint8Array[]} masks  - k segment masks, ordered darkest → lightest
  * @param {number}       width
  * @param {number}       height
- * @returns {Uint8Array} silhouette mask (1 = subject, 0 = background)
+ * @returns {Uint8Array} silhouette mask (1 = subject silhouette, 0 = background)
  */
 function _buildSilhouetteMask(masks, width, height) {
   const k = masks.length;
