@@ -16,10 +16,11 @@ import {
 
 // ---- Application state ----
 let state = {
-  originalImg:  null,   // HTMLImageElement
-  imageData:    null,   // ImageData (full resolution)
-  layers:       [],     // Layer[]
-  processing:   false,
+  originalImg:      null,   // HTMLImageElement
+  originalImageData: null,   // ImageData (original, unprocessed for AI comparison)
+  imageData:        null,   // ImageData (full resolution)
+  layers:           [],     // Layer[]
+  processing:       false,
 };
 
 // ---- DOM elements ----
@@ -37,6 +38,7 @@ const segMode       = $('seg-mode');
 const smoothing     = $('smoothing');
 const simplify      = $('simplify');
 const autoFixToggle = $('auto-fix');
+const enableAIToggle = $('enable-ai');
 const regMarks      = $('reg-marks');
 const bridgeThick   = $('bridge-thickness');
 
@@ -167,6 +169,11 @@ async function applyImage(img, width, height, name) {
   const MAX_PROCESSING_DIM = 1200;
   const { imageData, scale } = imageToData(img, MAX_PROCESSING_DIM);
   state.imageData = imageData;
+  
+  // Store original image data for AI comparison at processing resolution
+  // (AI compares at the same resolution as pipeline processing for accurate evaluation)
+  state.originalImageData = imageData;
+  
   state.layers    = [];
 
   resizeCanvas(width, height);
@@ -214,6 +221,8 @@ async function generateLayers() {
     simplify:         parseFloat(simplify.value),
     autoFix:          autoFixToggle.checked,
     bridgeThickness:  parseInt(bridgeThick.value, 10) || 4,
+    enableAI:         enableAIToggle.checked,
+    originalImageData: state.originalImageData,
   };
 
   try {
