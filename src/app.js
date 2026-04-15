@@ -72,6 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupAboutModal();
   setupLayerListEvents();
   setupKeyboardShortcuts();
+  setupMobileNav();
 
   // Focus the drop zone for keyboard users
   dropZone.focus();
@@ -187,6 +188,9 @@ async function applyImage(img, width, height, name) {
   setExportEnabled(false);
   setStatus('Image loaded — click Generate to create layers');
   toast('Image loaded', 'success', 2000);
+
+  // On mobile, jump straight to the canvas view so the user sees the image
+  switchMobileTab('canvas-area');
 }
 
 // ---- Layer generation ----
@@ -232,6 +236,9 @@ async function generateLayers() {
     setExportEnabled(true);
     setStatus(`${layers.length} layers generated`);
     toast(`${layers.length} layers generated`, 'success');
+
+    // On mobile, jump to the Layers panel so the user can review results
+    switchMobileTab('sidebar-right');
 
   } catch (err) {
     console.error(err);
@@ -402,7 +409,50 @@ function setupLayerListEvents() {
   });
 }
 
-// ---- Keyboard shortcuts ----
+// ---- Mobile navigation ----
+
+/**
+ * Wire up the mobile tab bar (Settings / Canvas / Layers).
+ * On desktop the nav is hidden via CSS; this function is safe to call always.
+ */
+function setupMobileNav() {
+  const tabs = document.querySelectorAll('.mobile-tab');
+  if (!tabs.length) return;
+
+  // Activate the Settings panel by default via the same path as a user tap
+  switchMobileTab('sidebar-left');
+
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      switchMobileTab(tab.dataset.panel);
+    });
+  });
+}
+
+/**
+ * Switch the visible mobile panel and update tab highlights.
+ * No-ops silently when called on desktop (panels have no mobile-active class to manage there).
+ * @param {'sidebar-left'|'canvas-area'|'sidebar-right'} panelId
+ */
+function switchMobileTab(panelId) {
+  const tabs   = document.querySelectorAll('.mobile-tab');
+  const panels = ['sidebar-left', 'canvas-area', 'sidebar-right'];
+
+  // Only act when the mobile nav is actually visible (i.e. on a narrow screen)
+  const nav = document.getElementById('mobile-nav');
+  if (!nav || getComputedStyle(nav).display === 'none') return;
+
+  tabs.forEach(t => {
+    const active = t.dataset.panel === panelId;
+    t.classList.toggle('active', active);
+    t.setAttribute('aria-pressed', String(active));
+  });
+
+  panels.forEach(id => {
+    document.getElementById(id)?.classList.toggle('mobile-active', id === panelId);
+  });
+}
+
 
 function setupKeyboardShortcuts() {
   document.addEventListener('keydown', e => {
