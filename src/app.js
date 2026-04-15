@@ -16,10 +16,11 @@ import {
 
 // ---- Application state ----
 let state = {
-  originalImg:  null,   // HTMLImageElement
-  imageData:    null,   // ImageData (full resolution)
-  layers:       [],     // Layer[]
-  processing:   false,
+  originalImg:      null,   // HTMLImageElement
+  originalImageData: null,   // ImageData (original, unprocessed for AI comparison)
+  imageData:        null,   // ImageData (full resolution)
+  layers:           [],     // Layer[]
+  processing:       false,
 };
 
 // ---- DOM elements ----
@@ -167,6 +168,10 @@ async function applyImage(img, width, height, name) {
   const MAX_PROCESSING_DIM = 1200;
   const { imageData, scale } = imageToData(img, MAX_PROCESSING_DIM);
   state.imageData = imageData;
+  
+  // Store original image data for AI comparison (at processing resolution)
+  state.originalImageData = imageData;
+  
   state.layers    = [];
 
   resizeCanvas(width, height);
@@ -214,6 +219,8 @@ async function generateLayers() {
     simplify:         parseFloat(simplify.value),
     autoFix:          autoFixToggle.checked,
     bridgeThickness:  parseInt(bridgeThick.value, 10) || 4,
+    enableAI:         true,
+    originalImageData: state.originalImageData,
   };
 
   try {

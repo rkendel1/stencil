@@ -10,6 +10,8 @@ import { toGrayscale, applySmoothing, bilateralFilter, normalizeContrast, sharpe
 import { kmeans, posterize, adaptiveThreshold, toBinaryMask } from './kmeans.js';
 import { vectorize } from './vectorizer.js';
 import { validateMask, autoFix, morphologicalClose } from './validator.js';
+import { assembleShadedComposite, imageDataToBase64, generateLayerPreviews, getLayerShades } from './compositeAssembler.js';
+import { evaluateComposite, applyAICorrections } from './aiEvaluation.js';
 
 // Palette of default layer colors
 const DEFAULT_COLORS = [
@@ -44,6 +46,8 @@ const DEFAULT_COLORS = [
  * @param {number}     settings.simplify         - Douglas-Peucker epsilon
  * @param {boolean}    settings.autoFix
  * @param {number}     settings.bridgeThickness
+ * @param {boolean}    settings.enableAI         - enable AI evaluation (default: true)
+ * @param {ImageData}  originalImageData         - original unprocessed image for AI comparison
  * @param {Function}   [onProgress]      - called with (step, total)
  * @returns {Promise<Layer[]>}
  */
@@ -55,12 +59,16 @@ export async function runPipeline(imageData, settings, onProgress) {
     simplify         = 1.0,
     autoFix: doAutoFix    = true,
     bridgeThickness  = 4,
+    enableAI         = true,
+    originalImageData = null,
   } = settings;
 
   const k = Math.max(2, Math.min(12, layerCount));
 
+  const totalSteps = enableAI ? 9 : 7;
+
   // ---- Step 1: Enhanced Preprocessing ----
-  onProgress?.(1, 7, 'Preprocessing image…');
+  onProgress?.(1, totalSteps, 'Preprocessing image…');
   await tick();
 
   // Apply edge-preserving noise reduction
@@ -80,7 +88,7 @@ export async function runPipeline(imageData, settings, onProgress) {
   const { width, height } = imageData;
 
   // ---- Step 2: Convert to Pure Black & White ----
-  onProgress?.(2, 7, 'Converting to pure B&W…');
+  onProgress?.(2, totalSteps, 'Converting to pure B&W…');
   await tick();
   
   // For stencil work, we need pure binary values (no gray)
@@ -92,7 +100,7 @@ export async function runPipeline(imageData, settings, onProgress) {
   }
   
   // ---- Step 3: Cluster / Segment ----
-  onProgress?.(3, 7, 'Segmenting layers…');
+  onProgress?.(3, totalSteps, 'Segmenting layers…');
   await tick();
 
   // Subsample for K-Means if image is large (keeps it fast)
@@ -139,7 +147,7 @@ export async function runPipeline(imageData, settings, onProgress) {
   }
 
   // ---- Step 4: Build masks ----
-  onProgress?.(4, 7, 'Building clean binary masks…');
+  onProgress?.(4, totalSteps, 'Building clean binary masks…');
   await tick();
 
   const masks = Array.from({ length: k }, () => new Uint8Array(width * height));
@@ -153,7 +161,7 @@ export async function runPipeline(imageData, settings, onProgress) {
   }
 
   // ---- Step 5: Validate + Auto-fix ----
-  onProgress?.(5, 7, 'Validating structure…');
+  onProgress?.(5, totalSteps, 'Validating structure…');
   await tick();
 
   const validations = masks.map(mask => {
@@ -174,7 +182,7 @@ export async function runPipeline(imageData, settings, onProgress) {
   });
 
   // ---- Step 6: Vectorize ----
-  onProgress?.(6, 7, 'Vectorizing layers…');
+  onProgress?.(6, totalSteps, 'Vectorizing layers…');
   await tick();
 
   const epsilon = Math.max(0.1, simplify);
@@ -209,8 +217,70 @@ export async function runPipeline(imageData, settings, onProgress) {
     };
   }));
 
-  // ---- Step 7: Done ----
-  onProgress?.(7, 7, 'Complete');
+  // ---- Step 7: Assemble Shaded Composite ----
+  if (enableAI) {
+    onProgress?.(7, totalSteps, 'Assembling composite…');
+    await tick();
+
+    const composite = assembleShadedComposite(masks, width, height);
+    const shades = getLayerShades(k);
+
+    // ---- Step 8: AI Composite Evaluation ----
+    onProgress?.(8, totalSteps, 'AI evaluation…');
+    await tick();
+
+    try {
+      // Convert images to base64 for AI
+      const compositeBase64 = await imageDataToBase64(composite);
+      const layerPreviews = await generateLayerPreviews(masks, width, height);
+      
+      let originalBase64 = null;
+      if (originalImageData) {
+        originalBase64 = await imageDataToBase64(originalImageData);
+      }
+
+      // Call AI evaluation
+      const evaluation = await evaluateComposite(
+        originalBase64,
+        compositeBase64,
+        layerPreviews,
+        shades
+      );
+
+      // Store evaluation results in metadata
+      for (let i = 0; i < layers.length; i++) {
+        layers[i].metadata.aiEvaluation = evaluation;
+        layers[i].metadata.shade = shades[i];
+      }
+
+      // ---- Step 9: Apply AI Corrections ----
+      onProgress?.(9, totalSteps, 'Applying AI corrections…');
+      await tick();
+
+      const corrections = applyAICorrections(masks, width, height, evaluation);
+      
+      // Add correction warnings to layers
+      if (corrections.warnings.length > 0) {
+        for (let i = 0; i < layers.length; i++) {
+          layers[i].warnings = [...layers[i].warnings, ...corrections.warnings];
+        }
+      }
+
+      // Log AI evaluation results
+      console.log('AI Evaluation Results:', evaluation);
+      console.log('Applied Corrections:', corrections);
+
+    } catch (error) {
+      console.error('AI evaluation failed:', error);
+      // Continue without AI evaluation
+      for (let i = 0; i < layers.length; i++) {
+        layers[i].warnings.push('AI evaluation unavailable');
+      }
+    }
+  }
+
+  // ---- Final Step: Complete ----
+  onProgress?.(totalSteps, totalSteps, 'Complete');
 
   return layers;
 }
