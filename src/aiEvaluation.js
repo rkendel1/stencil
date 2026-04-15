@@ -581,6 +581,12 @@ async function parseSilhouetteMask(result, width, height, imageBase64) {
 
     // Decode run-length encoding
     const runs = result.mask_data.split(',').map(r => parseInt(r.trim(), 10));
+    
+    // Validate all runs are valid numbers
+    if (runs.some(r => isNaN(r) || r < 0)) {
+      throw new Error('Invalid RLE mask_data: contains non-numeric or negative values');
+    }
+    
     let idx = 0;
     let value = 0; // Start with background (0)
     

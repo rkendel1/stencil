@@ -398,6 +398,7 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
     const threshold = 0.5;
     aiSilhouette = new Uint8Array(width * height);
     for (let i = 0; i < gray.length; i++) {
+      // Lower gray values (darker) = subject; higher (lighter) = background
       aiSilhouette[i] = gray[i] < threshold ? 1 : 0;
     }
     morphologicalClose(aiSilhouette, width, height, 7);
@@ -598,23 +599,6 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
 
   return { layers, fidelityScore: null, evaluation: null };
 }
-
-/**
- * Build the Layer 1 silhouette: a solid filled shape of the main subject.
- *
- * Identifies the background cluster (lightest cluster that dominates image borders),
- * then unions all other clusters to form the subject. Aggressive morphological
- * closing fills interior holes (eyes, teeth, decorations).
- *
- * @param {Uint8Array[]} masks     - k k-means cluster masks, ordered darkest→lightest
- * @param {number}       width
- * @param {number}       height
- * @param {object}       kmeansResult - kmeans result with centroids array
- * @returns {Uint8Array} silhouette mask  (1 = subject, 0 = background)
- */
-// _buildSilhouetteMask function removed - replaced by AI-native generateAISilhouette()
-// in aiEvaluation.js. Layer 1 is now generated entirely via AI vision segmentation.
-
 
 /**
  * Build a small preview ImageData for a layer (mask + color tint).
