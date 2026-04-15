@@ -55,8 +55,9 @@ export function renderLayerPanel(layers) {
   // Show AI quality score banner if available
   const fidelityScore = layers[0]?.metadata?.fidelityScore ?? null;
   const aiEval = layers[0]?.metadata?.aiEvaluation;
+  const refinementPasses = layers[0]?.metadata?.refinementPasses ?? null;
   if (fidelityScore !== null && aiEval) {
-    const banner = buildAIScoreBanner(fidelityScore, aiEval);
+    const banner = buildAIScoreBanner(fidelityScore, aiEval, refinementPasses);
     list.appendChild(banner);
   }
 
@@ -69,7 +70,7 @@ export function renderLayerPanel(layers) {
 /**
  * Build an AI quality score banner for the top of the layers panel.
  */
-function buildAIScoreBanner(score, evaluation) {
+function buildAIScoreBanner(score, evaluation, refinementPasses) {
   const banner = document.createElement('div');
   const quality = evaluation.overall_quality ?? 'unknown';
   const color = score >= 80 ? 'var(--accent-green, #27ae60)'
@@ -88,12 +89,16 @@ function buildAIScoreBanner(score, evaluation) {
   scoreEl.style.cssText = `font-size:18px; font-weight:700; color:${color};`;
   scoreEl.textContent = score;
 
+  const passNote = refinementPasses && refinementPasses > 1
+    ? ` · ${refinementPasses} AI passes`
+    : '';
+
   const label = document.createElement('div');
   label.style.cssText = 'flex:1; line-height:1.4;';
   label.innerHTML = `<strong>AI Quality Score</strong><br>
     <span style="color:var(--text-dim)">
       ${quality.charAt(0).toUpperCase() + quality.slice(1)} · 
-      ${evaluation.airbrush_ready ? '✓ Airbrush ready' : '⚠ Needs attention'}
+      ${evaluation.airbrush_ready ? '✓ Airbrush ready' : '⚠ Needs attention'}${passNote}
     </span>`;
 
   banner.append(scoreEl, document.createTextNode('/100'), label);

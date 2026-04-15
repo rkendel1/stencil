@@ -237,17 +237,34 @@ async function generateLayers() {
     const layers = await runPipeline(
       state.imageData,
       settings,
-      (step, total, msg) => {
+      (step, total, msg, iterCtx) => {
         setProgress(step, total);
+
         if (step === 0) {
           setStatus('🤖 ' + (msg ?? 'AI assessing image…'));
-          if (aiStatusEl) aiStatusEl.textContent = '🤖 AI is analysing your image…';
-        } else if (step === 8 || step === 9) {
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 Analysing image…';
+
+        } else if (iterCtx && iterCtx.iteration > 1) {
+          // Refinement pass — show iteration number and live best score
+          const passLabel = `Pass ${iterCtx.iteration}`;
+          const scoreHint = iterCtx.bestScore >= 0
+            ? ` · best score so far: ${iterCtx.bestScore}/100`
+            : '';
+          if (aiStatusEl) {
+            aiStatusEl.textContent = iterCtx.converged
+              ? `🤖 Converged at ${iterCtx.bestScore}/100`
+              : `🔄 ${passLabel}${scoreHint}`;
+          }
+          setStatus(msg ?? `${passLabel}: step ${step}/${total}`);
+
+        } else if (step === 8 || step === 9 || step === 10) {
           if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + (msg ?? '');
           setStatus(msg ?? `Step ${step}/${total}`);
+
         } else {
-          if (aiStatusEl && aiStatusEl.textContent.startsWith('🤖 AI is analysing')) {
-            aiStatusEl.textContent = '';
+          if (aiStatusEl && (aiStatusEl.textContent.startsWith('🤖 Anal') ||
+                             aiStatusEl.textContent === '')) {
+            // leave blank during core steps on first pass
           }
           setStatus(msg ?? `Step ${step}/${total}`);
         }
@@ -258,14 +275,15 @@ async function generateLayers() {
     renderLayerPanel(layers);
     if (btnFixAll) btnFixAll.disabled = false;
 
-    // Show AI quality score in the status area
-    const fidelityScore = layers[0]?.metadata?.fidelityScore;
-    const aiEval = layers[0]?.metadata?.aiEvaluation;
-    if (fidelityScore !== null && fidelityScore !== undefined && aiEval && !aiEval.skipped) {
+    // Show final AI quality score and convergence message
+    const convergenceMessage = layers[0]?.metadata?.convergenceMessage;
+    const fidelityScore      = layers[0]?.metadata?.fidelityScore;
+    const aiEval             = layers[0]?.metadata?.aiEvaluation;
+    if (convergenceMessage) {
+      if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + convergenceMessage;
+    } else if (fidelityScore !== null && fidelityScore !== undefined && aiEval && !aiEval.skipped) {
       const quality = aiEval.overall_quality ?? '';
-      if (aiStatusEl) {
-        aiStatusEl.textContent = `🤖 AI score: ${fidelityScore}/100 — ${quality}`;
-      }
+      if (aiStatusEl) aiStatusEl.textContent = `🤖 AI score: ${fidelityScore}/100 — ${quality}`;
     } else if (aiEval?.skipped) {
       if (aiStatusEl) aiStatusEl.textContent = '';
     }
@@ -274,9 +292,11 @@ async function generateLayers() {
     resizeCanvas(state.imageData.width, state.imageData.height);
     redraw();
 
+    const passes = layers[0]?.metadata?.refinementPasses ?? 1;
+    const passNote = passes > 1 ? ` (${passes} AI passes)` : '';
     setExportEnabled(true);
-    setStatus(`${layers.length} layers generated`);
-    toast(`${layers.length} layers generated`, 'success');
+    setStatus(`${layers.length} layers generated${passNote}`);
+    toast(`${layers.length} layers generated${passNote}`, 'success');
 
     // On mobile, jump to the Layers panel so the user can review results
     switchMobileTab('sidebar-right');

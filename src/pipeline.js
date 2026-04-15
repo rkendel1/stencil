@@ -36,9 +36,32 @@ const DEFAULT_COLORS = [
  */
 
 /**
- * Run the full stencil generation pipeline.
+ * Quality score target — the loop continues as long as the score is below this
+ * AND each iteration still produces a meaningful improvement.
+ */
+const QUALITY_TARGET = 80;
+
+/**
+ * Minimum score improvement required to justify another iteration.
+ * If the delta between two consecutive runs falls below this, we declare
+ * convergence and return the best result seen so far.
+ */
+const MIN_IMPROVEMENT = 3;
+
+/**
+ * Run the full stencil generation pipeline with infinite AI refinement.
  *
- * @param {ImageData}  imageData        - original or pre-processed image
+ * When AI is enabled the pipeline:
+ *   0. AI pre-assesses the image and recommends initial settings
+ *   1-6. Core processing (preprocess → segment → mask → validate → vectorize)
+ *   7. Assemble shaded composite
+ *   8. AI evaluates quality (fidelity score 0-100)
+ *   9. AI corrections applied to masks
+ *  10. If score < QUALITY_TARGET and score improved ≥ MIN_IMPROVEMENT vs. the
+ *      previous iteration, settings are tightened and the loop repeats from step 1.
+ *      The loop runs indefinitely until the score converges or the target is met.
+ *
+ * @param {ImageData}  imageData
  * @param {object}     settings
  * @param {number}     settings.layerCount
  * @param {'kmeans'|'threshold'|'posterize'} settings.segmentationMode
@@ -46,10 +69,11 @@ const DEFAULT_COLORS = [
  * @param {number}     settings.simplify         - Douglas-Peucker epsilon
  * @param {boolean}    settings.autoFix
  * @param {number}     settings.bridgeThickness
- * @param {boolean}    settings.enableAI         - enable AI evaluation (default: true)
- * @param {ImageData}  originalImageData         - original unprocessed image for AI comparison
- * @param {number}     settings.minIslandArea     - minimum fragment area to keep (0 = auto-scale)
- * @param {Function}   [onProgress]      - called with (step, total, message)
+ * @param {boolean}    settings.enableAI
+ * @param {ImageData}  settings.originalImageData
+ * @param {number}     settings.minIslandArea    - 0 = auto-scale
+ * @param {Function}   [onProgress]  (step, total, message, iterCtx) where
+ *                     iterCtx = { iteration, bestScore, converged }
  * @returns {Promise<Layer[]>}
  */
 export async function runPipeline(imageData, settings, onProgress) {
@@ -62,25 +86,22 @@ export async function runPipeline(imageData, settings, onProgress) {
     bridgeThickness  = 4,
     enableAI         = true,
     originalImageData = null,
-    minIslandArea    = 0,    // 0 = auto-scale based on image size
+    minIslandArea    = 0,
   } = settings;
 
-  const k = Math.max(2, Math.min(12, layerCount));
-
-  // Auto-scale minIslandArea based on image resolution to reduce micro-fragments.
-  // For a 1200×1200 image this yields ~288px; for smaller images it's still >= 50px.
+  // Auto-scale minIslandArea based on image resolution.
   const imageArea = imageData.width * imageData.height;
-  const effectiveMinArea = minIslandArea > 0
+  const baseMinArea = minIslandArea > 0
     ? minIslandArea
     : Math.max(50, Math.floor(imageArea * 0.0002));
 
-  // AI pre-assessment adds step 0; AI evaluation adds steps 8-9
+  // Step 0 is AI pre-assessment; steps 8-10 are AI eval/refine.
   const totalSteps = enableAI ? 10 : 7;
 
-  // ---- Step 0: AI Pre-Assessment (suggest optimal settings) ----
+  // ---- Step 0: AI Pre-Assessment ----
   let aiSuggestedSettings = null;
   if (enableAI && originalImageData) {
-    onProgress?.(0, totalSteps, 'AI assessing image…');
+    onProgress?.(0, totalSteps, 'AI assessing image…', { iteration: 0, bestScore: null, converged: false });
     await tick();
 
     try {
@@ -90,7 +111,6 @@ export async function runPipeline(imageData, settings, onProgress) {
         originalImageData.width,
         originalImageData.height,
       );
-
       if (aiSuggestedSettings) {
         console.log('AI suggested settings:', aiSuggestedSettings);
       }
@@ -99,45 +119,163 @@ export async function runPipeline(imageData, settings, onProgress) {
     }
   }
 
-  // Merge AI-suggested settings over defaults (user explicit settings always win
-  // unless they're at their defaults, which we detect by comparing to the raw input).
-  const resolvedSmoothing  = (settings.smoothing  !== undefined)
-    ? settings.smoothing
-    : (aiSuggestedSettings?.smoothing ?? smoothing);
-  const resolvedSimplify   = (settings.simplify   !== undefined)
-    ? settings.simplify
-    : (aiSuggestedSettings?.simplify  ?? simplify);
-  const resolvedMinIsland  = minIslandArea > 0
-    ? minIslandArea
-    : (aiSuggestedSettings?.minIslandArea ?? effectiveMinArea);
-  const resolvedLayerCount = Math.max(2, Math.min(12,
-    (settings.layerCount !== undefined)
-      ? settings.layerCount
-      : (aiSuggestedSettings?.layerCount ?? layerCount)
-  ));
-  const resolvedSegMode    = (settings.segmentationMode !== undefined)
-    ? settings.segmentationMode
-    : (aiSuggestedSettings?.segmentationMode ?? segmentationMode);
-  const resolvedBridge     = (settings.bridgeThickness !== undefined)
-    ? settings.bridgeThickness
-    : (aiSuggestedSettings?.bridgeThickness ?? bridgeThickness);
-
-  return _runPipelineCore(imageData, {
-    layerCount:       resolvedLayerCount,
-    segmentationMode: resolvedSegMode,
-    smoothing:        resolvedSmoothing,
-    simplify:         resolvedSimplify,
+  // Build initial resolved settings (AI suggestion wins over defaults,
+  // but explicit user values always take precedence).
+  let currentOpts = {
+    layerCount: Math.max(2, Math.min(12,
+      (settings.layerCount !== undefined)
+        ? settings.layerCount
+        : (aiSuggestedSettings?.layerCount ?? layerCount)
+    )),
+    segmentationMode: (settings.segmentationMode !== undefined)
+      ? settings.segmentationMode
+      : (aiSuggestedSettings?.segmentationMode ?? segmentationMode),
+    smoothing: (settings.smoothing !== undefined)
+      ? settings.smoothing
+      : (aiSuggestedSettings?.smoothing ?? smoothing),
+    simplify: (settings.simplify !== undefined)
+      ? settings.simplify
+      : (aiSuggestedSettings?.simplify ?? simplify),
     doAutoFix,
-    bridgeThickness:  resolvedBridge,
+    bridgeThickness: (settings.bridgeThickness !== undefined)
+      ? settings.bridgeThickness
+      : (aiSuggestedSettings?.bridgeThickness ?? bridgeThickness),
     enableAI,
     originalImageData,
-    effectiveMinArea: resolvedMinIsland,
+    effectiveMinArea: minIslandArea > 0
+      ? minIslandArea
+      : (aiSuggestedSettings?.minIslandArea ?? baseMinArea),
     aiSuggestedSettings,
-  }, onProgress, totalSteps);
+  };
+
+  // ---- Infinite refinement loop ----
+  let bestLayers     = null;
+  let bestScore      = -1;
+  let previousScore  = -1;
+  let iteration      = 0;
+
+  while (true) {
+    iteration++;
+    const iterCtx = { iteration, bestScore, converged: false };
+
+    const iterLabel = iteration > 1 ? ` (pass ${iteration})` : '';
+    const wrapProgress = (step, total, msg) =>
+      onProgress?.(step, total, msg ? msg + iterLabel : `Step ${step}/${total}${iterLabel}`, iterCtx);
+
+    const { layers, fidelityScore, evaluation } =
+      await _runPipelineCore(imageData, currentOpts, wrapProgress, totalSteps);
+
+    const score = fidelityScore ?? -1;
+    console.log(`Iteration ${iteration}: fidelity = ${score}`);
+
+    // Keep the best result regardless of convergence decision
+    if (score > bestScore || bestLayers === null) {
+      bestScore  = score;
+      bestLayers = layers;
+    }
+
+    // If AI is disabled or evaluation was skipped, exit immediately
+    if (!enableAI || score < 0) break;
+
+    // ---- Convergence check ----
+    const improvement = score - previousScore;
+    const targetMet   = score >= QUALITY_TARGET;
+    const converged   = previousScore >= 0 && improvement < MIN_IMPROVEMENT;
+
+    if (targetMet || converged) {
+      // Stamp convergence info onto layer metadata
+      const convergeMsg = targetMet
+        ? `AI target met (${bestScore}/100) after ${iteration} pass${iteration > 1 ? 'es' : ''}`
+        : `AI converged at ${bestScore}/100 after ${iteration} pass${iteration > 1 ? 'es' : ''}`;
+      bestLayers.forEach(l => {
+        l.metadata.refinementPasses    = iteration;
+        l.metadata.convergenceMessage  = convergeMsg;
+        // Replace or prepend quality note so it reflects final score
+        l.warnings = [
+          `AI quality score: ${bestScore}/100 (${evaluation?.overall_quality ?? 'n/a'}) — ${convergeMsg}`,
+          ...(l.warnings ?? []).filter(w => !w.startsWith('AI quality score:')),
+        ];
+      });
+      onProgress?.(totalSteps, totalSteps, convergeMsg, { iteration, bestScore, converged: true });
+      break;
+    }
+
+    // ---- Adjust settings for next iteration ----
+    previousScore = score;
+    currentOpts   = _tightenSettings(currentOpts, evaluation, score, imageArea);
+
+    // If nothing changed, there's nothing more we can do
+    if (!currentOpts) break;
+  }
+
+  return bestLayers;
 }
 
 /**
- * Internal pipeline core.  Called by runPipeline (and by the iterative-refine loop).
+ * Derive tighter settings for the next refinement iteration based on the AI
+ * evaluation result.  Returns null if no meaningful changes are possible.
+ *
+ * @param {object} opts     - current pipeline options
+ * @param {object} evaluation - AI evaluation from the just-completed iteration
+ * @param {number} score    - fidelity score (0-100)
+ * @param {number} imageArea - total image pixel count
+ * @returns {object|null}
+ */
+function _tightenSettings(opts, evaluation, score, imageArea) {
+  const next = { ...opts };
+  let changed = false;
+
+  // More smoothing for noisy/fragmented outputs
+  if (score < 60 && next.smoothing < 5) {
+    next.smoothing = Math.min(5, next.smoothing + 2);
+    changed = true;
+  } else if (score < 80 && next.smoothing < 4) {
+    next.smoothing = next.smoothing + 1;
+    changed = true;
+  }
+
+  // Increase minimum island area to eliminate micro-fragments
+  const maxMinArea = Math.max(800, Math.floor(imageArea * 0.0008));
+  if (next.effectiveMinArea < maxMinArea) {
+    const bump = score < 50
+      ? Math.floor(next.effectiveMinArea * 0.6)   // aggressive: +60%
+      : Math.floor(next.effectiveMinArea * 0.3);  // moderate:  +30%
+    next.effectiveMinArea = Math.min(maxMinArea, next.effectiveMinArea + Math.max(50, bump));
+    changed = true;
+  }
+
+  // Increase path simplification to reduce noisy contours
+  if (score < 65 && next.simplify < 4.0) {
+    next.simplify = Math.min(4.0, parseFloat((next.simplify + 0.5).toFixed(1)));
+    changed = true;
+  }
+
+  // If there are thin/weak bridge issues, thicken bridges
+  const hasBridgeIssues = evaluation?.airbrush_issues?.some(
+    i => i.issue === 'weak_bridge' || i.severity === 'high'
+  );
+  if (hasBridgeIssues && next.bridgeThickness < 8) {
+    next.bridgeThickness = Math.min(8, next.bridgeThickness + 2);
+    changed = true;
+  }
+
+  // If there are many fragmented layers and we have room, reduce layer count
+  const fragmentedLayers = (evaluation?.airbrush_issues ?? []).filter(
+    i => i.issue === 'detail_too_fine'
+  ).length;
+  if (fragmentedLayers >= 2 && next.layerCount > 2) {
+    next.layerCount = Math.max(2, next.layerCount - 1);
+    changed = true;
+  }
+
+  return changed ? next : null;
+}
+
+/**
+ * Internal pipeline core.  Runs steps 1-10 once and returns layers plus the AI
+ * evaluation result so the outer refinement loop can make decisions.
+ *
+ * @returns {Promise<{ layers: Layer[], fidelityScore: number|null, evaluation: object|null }>}
  */
 async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   const {
@@ -396,27 +534,23 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
       console.log('AI Evaluation Results:', evaluation);
       console.log('Applied Corrections:', corrections);
 
-      // ---- Step 10: AI Iterative Refinement ----
-      // If quality is poor/fair, log a recommendation for the user.
-      onProgress?.(10, totalSteps, 'Finalising…');
+      // Signal progress for step 10 (outer loop will decide whether to iterate)
+      onProgress?.(10, totalSteps, 'AI pass complete…');
       await tick();
 
-      if (fidelityScore !== null && fidelityScore < 55 && evaluation.recommendations) {
-        for (let i = 0; i < layers.length; i++) {
-          layers[i].warnings.push('Tip: ' + evaluation.recommendations.substring(0, 120));
-        }
-      }
+      return { layers, fidelityScore, evaluation };
 
     } catch (error) {
       console.error('AI evaluation failed:', error);
-      // Continue without AI evaluation — do not add noise warnings
+      // Return layers without score — outer loop will stop iterating
+      return { layers, fidelityScore: null, evaluation: null };
     }
   }
 
-  // ---- Final Step: Complete ----
+  // ---- Final Step: Complete (non-AI path) ----
   onProgress?.(totalSteps, totalSteps, 'Complete');
 
-  return layers;
+  return { layers, fidelityScore: null, evaluation: null };
 }
 
 /**
