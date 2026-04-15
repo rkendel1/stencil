@@ -11,36 +11,6 @@ import { kmeans, posterize, adaptiveThreshold, toBinaryMask } from './kmeans.js'
 import { vectorize } from './vectorizer.js';
 import { validateMask, autoFix, morphologicalClose } from './validator.js';
 
-// Optional integrations (load asynchronously to avoid blocking)
-let opencvIntegration = null;
-let potraceIntegration = null;
-let useOpenCV = false;
-let usePotrace = false;
-
-// Try to load OpenCV.js integration
-(async () => {
-  try {
-    opencvIntegration = await import('./opencvIntegration.js');
-    useOpenCV = await opencvIntegration.initOpenCV();
-    if (useOpenCV) {
-      console.log('✅ OpenCV.js integration enabled');
-    }
-  } catch (e) {
-    console.log('ℹ️ OpenCV.js not available, using custom implementations');
-  }
-})();
-
-// Try to load Potrace integration
-(async () => {
-  try {
-    potraceIntegration = await import('./potraceIntegration.js');
-    usePotrace = true;
-    console.log('✅ Potrace integration enabled');
-  } catch (e) {
-    console.log('ℹ️ Potrace not available, using marching squares');
-  }
-})();
-
 // Palette of default layer colors
 const DEFAULT_COLORS = [
   '#1a1a2e', '#e94560', '#0f3460', '#533483',
@@ -178,19 +148,8 @@ export async function runPipeline(imageData, settings, onProgress) {
   }
   
   // Clean up masks with morphological operations
-  // Try OpenCV for faster performance, fallback to custom implementation
   for (let i = 0; i < k; i++) {
-    if (useOpenCV && opencvIntegration) {
-      try {
-        masks[i] = opencvIntegration.morphologyEx(masks[i], width, height, 'close', 5);
-        console.log(`Layer ${i + 1}: Using OpenCV morphological close`);
-      } catch (error) {
-        console.warn(`Layer ${i + 1}: OpenCV morph failed, using custom`, error);
-        morphologicalClose(masks[i], width, height, 2);
-      }
-    } else {
-      morphologicalClose(masks[i], width, height, 2);
-    }
+    morphologicalClose(masks[i], width, height, 2);
   }
 
   // ---- Step 5: Validate + Auto-fix ----
@@ -221,30 +180,9 @@ export async function runPipeline(imageData, settings, onProgress) {
   const epsilon = Math.max(0.1, simplify);
 
   const layers = await Promise.all(masks.map(async (mask, idx) => {
-    let pathData, contours;
-    
-    // Try Potrace for better quality, fallback to marching squares
-    if (usePotrace && potraceIntegration) {
-      try {
-        pathData = await potraceIntegration.traceMaskWithPotrace(mask, width, height, {
-          turdSize: 2,
-          alphaMax: 1.0,
-          optTolerance: epsilon * 0.2
-        });
-        contours = []; // Potrace provides path data directly
-        console.log(`Layer ${idx + 1}: Using Potrace vectorization`);
-      } catch (error) {
-        console.warn(`Layer ${idx + 1}: Potrace failed, using marching squares`, error);
-        const result = vectorize(mask, width, height, epsilon, 1);
-        pathData = result.pathData;
-        contours = result.contours;
-      }
-    } else {
-      const result = vectorize(mask, width, height, epsilon, 1);
-      pathData = result.pathData;
-      contours = result.contours;
-    }
-    
+    const result = vectorize(mask, width, height, epsilon, 1);
+    const { pathData, contours } = result;
+
     const color = DEFAULT_COLORS[idx % DEFAULT_COLORS.length];
     const preview = buildPreview(mask, width, height, color);
 
@@ -264,9 +202,9 @@ export async function runPipeline(imageData, settings, onProgress) {
         height,
         dpi:         72,
         algorithm:   segmentationMode,
-        centroid:    result.centroids[idx],
+        centroid:    result.centroids?.[idx],
         pixelCount:  mask.reduce((s, v) => s + v, 0),
-        vectorizer:  (usePotrace && potraceIntegration) ? 'potrace' : 'marching-squares',
+        vectorizer:  'marching-squares',
       },
     };
   }));

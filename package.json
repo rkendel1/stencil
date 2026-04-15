@@ -9,11 +9,7 @@
     "preview": "vite preview",
     "start": "vite"
   },
-  "dependencies": {
-    "@techstark/opencv-js": "^4.9.0-release.1",
-    "potrace": "^2.1.8",
-    "jimp": "^0.22.10"
-  },
+  "dependencies": {},
   "devDependencies": {
     "vite": "^5.2.0",
     "terser": "^5.36.0"
