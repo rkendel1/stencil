@@ -388,6 +388,12 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
     morphologicalClose(masks[i], width, height, 1);
   }
 
+  // Replace the darkest cluster mask with a smooth outer silhouette.
+  // A real airbrush Layer 1 is the broad, filled base-coat shape — no internal
+  // holes or detail cuts.  The BFS flood-fill from the image border fills every
+  // enclosed gap, producing the clean outer outline expected for the first spray.
+  masks[0] = _buildSilhouetteMask(masks, width, height);
+
   // ---- Step 5: Validate + Auto-fix ----
   onProgress?.(5, totalSteps, 'Validating and fixing layers…');
   await tick();
@@ -551,6 +557,81 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   onProgress?.(totalSteps, totalSteps, 'Complete');
 
   return { layers, fidelityScore: null, evaluation: null };
+}
+
+/**
+ * Build a smooth outer silhouette mask suitable for Layer 1 (base coat).
+ *
+ * The approach:
+ *   1. Union all non-background segment masks (centroids are sorted
+ *      darkest→lightest, so masks[k-1] is the lightest / background cluster).
+ *   2. BFS flood-fill from every border pixel that is NOT in the subject union
+ *      to identify the true external background.
+ *   3. Every pixel NOT reached by the flood fill is part of the silhouette
+ *      (including previously hollow interior areas), giving a fully-filled
+ *      outer shape with no internal holes.
+ *
+ * @param {Uint8Array[]} masks  - k segment masks, ordered darkest → lightest
+ * @param {number}       width
+ * @param {number}       height
+ * @returns {Uint8Array} silhouette mask (1 = subject, 0 = background)
+ */
+function _buildSilhouetteMask(masks, width, height) {
+  const k = masks.length;
+
+  // Union of all subject (non-background) masks.
+  // masks[k-1] is the lightest cluster (background); skip it.
+  const union = new Uint8Array(width * height);
+  for (let c = 0; c < k - 1; c++) {
+    const m = masks[c];
+    for (let i = 0; i < union.length; i++) {
+      if (m[i]) union[i] = 1;
+    }
+  }
+
+  // BFS flood-fill from border pixels that are NOT part of the subject union.
+  // Uses a pre-allocated array as a queue (O(n) time).
+  const bgReached = new Uint8Array(width * height);
+  const queue     = new Int32Array(width * height);
+  let head = 0, tail = 0;
+
+  const enqueue = (idx) => {
+    if (!bgReached[idx] && !union[idx]) {
+      bgReached[idx] = 1;
+      queue[tail++] = idx;
+    }
+  };
+
+  // Seed: top and bottom rows
+  for (let x = 0; x < width; x++) {
+    enqueue(x);
+    enqueue((height - 1) * width + x);
+  }
+  // Seed: left and right columns (excluding corners already added above)
+  for (let y = 1; y < height - 1; y++) {
+    enqueue(y * width);
+    enqueue(y * width + (width - 1));
+  }
+
+  // BFS: 4-connectivity
+  while (head < tail) {
+    const idx = queue[head++];
+    const x   = idx % width;
+    const y   = (idx / width) | 0;
+
+    if (y > 0)           enqueue(idx - width);
+    if (y < height - 1)  enqueue(idx + width);
+    if (x > 0)           enqueue(idx - 1);
+    if (x < width - 1)   enqueue(idx + 1);
+  }
+
+  // Silhouette: every pixel NOT reachable from the border as background
+  const silhouette = new Uint8Array(width * height);
+  for (let i = 0; i < silhouette.length; i++) {
+    silhouette[i] = bgReached[i] ? 0 : 1;
+  }
+
+  return silhouette;
 }
 
 /**
