@@ -389,9 +389,9 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   }
 
   // Layer 1 = solid negative-space silhouette of the main subject.
-  // Union all non-background k-means clusters + aggressive morphological closing
-  // creates the broadest possible filled base-coat shape.
-  masks[0] = _buildSilhouetteMask(masks, width, height);
+  // Identify which cluster represents the background (typically the lightest
+  // AND largest cluster that touches image borders), then union all other clusters.
+  masks[0] = _buildSilhouetteMask(masks, width, height, result);
 
   // INVERT ALL MASKS: stencils are cutouts (negative space), not filled shapes.
   // 1 = stencil material (opaque), 0 = cutout (where paint passes through).
@@ -574,22 +574,60 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
 /**
  * Build the Layer 1 silhouette: a solid filled shape of the main subject.
  *
- * Uses k-means segmentation to identify distinct tonal regions, then unions
- * all non-background clusters (darkest k-1 clusters) to form the subject.
- * Aggressive morphological closing fills interior holes (eyes, teeth, decorations).
+ * Identifies the background cluster (lightest cluster that dominates image borders),
+ * then unions all other clusters to form the subject. Aggressive morphological
+ * closing fills interior holes (eyes, teeth, decorations).
  *
- * @param {Uint8Array[]} masks  - k k-means cluster masks, ordered darkest→lightest
+ * @param {Uint8Array[]} masks     - k k-means cluster masks, ordered darkest→lightest
  * @param {number}       width
  * @param {number}       height
+ * @param {object}       kmeansResult - kmeans result with centroids array
  * @returns {Uint8Array} silhouette mask  (1 = subject, 0 = background)
  */
-function _buildSilhouetteMask(masks, width, height) {
+function _buildSilhouetteMask(masks, width, height, kmeansResult) {
   const k = masks.length;
   const n = width * height;
+  const centroids = kmeansResult.centroids;
 
-  // Union all non-background clusters (masks[0..k-2]; masks[k-1] is lightest/background)
+  // Identify the background cluster:
+  // 1. Count how many border pixels belong to each cluster
+  // 2. Background is typically the cluster with the most border coverage
+  //    AND the lightest centroid value
+  const borderCounts = new Int32Array(k);
+  const totalCounts = new Int32Array(k);
+  
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < k; c++) {
+      if (masks[c][i]) {
+        totalCounts[c]++;
+        const x = i % width;
+        const y = (i / width) | 0;
+        if (x === 0 || x === width - 1 || y === 0 || y === height - 1) {
+          borderCounts[c]++;
+        }
+        break; // Each pixel belongs to exactly one cluster
+      }
+    }
+  }
+
+  // Find cluster with highest border coverage percentage
+  let bgCluster = k - 1; // Default to lightest cluster
+  let maxBorderRatio = 0;
+  
+  for (let c = 0; c < k; c++) {
+    if (totalCounts[c] === 0) continue; // Skip empty clusters
+    const borderRatio = borderCounts[c] / totalCounts[c];
+    // Background cluster should have both high border ratio AND light centroid
+    if (borderRatio > maxBorderRatio && centroids[c] > 0.5) {
+      maxBorderRatio = borderRatio;
+      bgCluster = c;
+    }
+  }
+
+  // Union all non-background clusters
   const union = new Uint8Array(n);
-  for (let c = 0; c < k - 1; c++) {
+  for (let c = 0; c < k; c++) {
+    if (c === bgCluster) continue; // Skip background
     const m = masks[c];
     for (let i = 0; i < n; i++) {
       if (m[i]) union[i] = 1;
