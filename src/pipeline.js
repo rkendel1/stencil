@@ -151,7 +151,7 @@ export async function runPipeline(imageData, settings, onProgress) {
   // ---- Infinite refinement loop ----
   let bestLayers     = null;
   let bestScore      = -1;
-  let previousScore  = -1;
+  let priorScore  = -1;
   let iteration      = 0;
 
   while (true) {
@@ -178,9 +178,9 @@ export async function runPipeline(imageData, settings, onProgress) {
     if (!enableAI || score < 0) break;
 
     // ---- Convergence check ----
-    const improvement = score - previousScore;
+    const improvement = score - priorScore;
     const targetMet   = score >= QUALITY_TARGET;
-    const converged   = previousScore >= 0 && improvement < MIN_IMPROVEMENT;
+    const converged   = priorScore >= 0 && improvement < MIN_IMPROVEMENT;
 
     if (targetMet || converged) {
       // Stamp convergence info onto layer metadata
@@ -201,7 +201,7 @@ export async function runPipeline(imageData, settings, onProgress) {
     }
 
     // ---- Adjust settings for next iteration ----
-    previousScore = score;
+    priorScore = score;
     currentOpts   = _tightenSettings(currentOpts, evaluation, score, imageArea);
 
     // If nothing changed, there's nothing more we can do

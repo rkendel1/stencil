@@ -13,7 +13,6 @@ import {
 import {
   exportSVG, exportPNG, exportPDF, exportEPS, exportAll,
 } from './exporter.js';
-import { removeMicroFragments, morphologicalClose, validateMask } from './validator.js';
 
 // ---- Application state ----
 let state = {
@@ -318,39 +317,123 @@ async function generateLayers() {
 
 function setupFixAllBtn() {
   if (!btnFixAll) return;
-  btnFixAll.addEventListener('click', () => {
-    if (!state.layers.length) return;
-    fixAllLayers();
+  btnFixAll.addEventListener('click', async () => {
+    if (!state.imageData || state.processing) return;
+    await fixAllLayersWithAI();
   });
 }
 
 /**
- * Apply aggressive micro-fragment removal to all layers to clear warnings.
- * Uses a higher minIslandArea than the default to clean up any remaining noise.
+ * Re-run the full infinite AI refinement pipeline with more aggressive initial
+ * settings derived from the current layer state, then replace state.layers with
+ * the best result.  Progress is shown in the same status / AI-status areas as
+ * the main Generate flow.
  */
-function fixAllLayers() {
-  if (!state.layers.length || !state.imageData) return;
+async function fixAllLayersWithAI() {
+  if (!state.imageData) return;
 
-  const { width, height } = state.imageData;
-  const imageArea = width * height;
-  // Use a more aggressive threshold for manual fix — 2× the auto-scale amount
-  const aggressiveMin = Math.max(100, Math.floor(imageArea * 0.0004));
+  state.processing = true;
+  btnFixAll.disabled = true;
+  btnFixAll.textContent = '⏳ Refining…';
+  generateBtn.disabled = true;
+  if (aiStatusEl) aiStatusEl.textContent = '🤖 Re-running with AI refinement…';
 
-  state.layers.forEach(layer => {
-    removeMicroFragments(layer.mask, width, height, aggressiveMin);
-    morphologicalClose(layer.mask, width, height, 1);
-    layer.metadata.pixelCount = layer.mask.reduce((s, v) => s + v, 0);
-    // Re-validate to get updated warnings
-    const v = validateMask(layer.mask, width, height, aggressiveMin);
-    layer.warnings = v.warnings;
-    // Rebuild the preview thumbnail
-    updateLayerColor(layer, layer.color);
-  });
+  // Derive a starting point from the current layers so we continue from where
+  // we left off rather than starting completely cold.
+  const currentLayers = state.layers;
+  const currentLayerCount = currentLayers.length || parseInt(layerCount.value, 10) || 4;
 
-  renderLayerPanel(state.layers);
-  redraw();
-  toast('All layers cleaned up', 'success', 2500);
-  setStatus('Layers fixed — warnings cleared');
+  // Escalate from whatever settings produced the current layers:
+  // - preserve layer count
+  // - force high smoothing and large minIslandArea so the very first pass
+  //   already removes most fragments before AI takes over
+  const imageArea = state.imageData.width * state.imageData.height;
+  const aggressiveMinArea = Math.max(200, Math.floor(imageArea * 0.0005));
+
+  // Read the previous AI-suggested smoothing from metadata (if available)
+  const prevSmoothing = currentLayers[0]?.metadata?.aiSettings?.smoothing
+    ?? parseInt(smoothing.value, 10);
+  const startSmoothing = Math.min(5, prevSmoothing + 1); // nudge up by one
+
+  const settings = {
+    layerCount:       currentLayerCount,
+    segmentationMode: segMode.value,
+    smoothing:        startSmoothing,
+    simplify:         parseFloat(simplify.value),
+    autoFix:          true,           // always on for fix-all
+    bridgeThickness:  parseInt(bridgeThick.value, 10) || 4,
+    enableAI:         true,           // always use AI for fix-all
+    originalImageData: state.originalImageData,
+    minIslandArea:    aggressiveMinArea,
+  };
+
+  try {
+    const layers = await runPipeline(
+      state.imageData,
+      settings,
+      (step, total, msg, iterCtx) => {
+        setProgress(step, total);
+
+        if (step === 0) {
+          setStatus('🤖 ' + (msg ?? 'AI assessing image…'));
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 Analysing image…';
+
+        } else if (iterCtx && iterCtx.iteration > 1) {
+          const passLabel = `Pass ${iterCtx.iteration}`;
+          const scoreHint = iterCtx.bestScore >= 0
+            ? ` · best: ${iterCtx.bestScore}/100`
+            : '';
+          if (aiStatusEl) {
+            aiStatusEl.textContent = iterCtx.converged
+              ? `🤖 Converged at ${iterCtx.bestScore}/100`
+              : `🔄 ${passLabel}${scoreHint}`;
+          }
+          setStatus(msg ?? `${passLabel}: step ${step}/${total}`);
+
+        } else if (step === 8 || step === 9 || step === 10) {
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + (msg ?? '');
+          setStatus(msg ?? `Step ${step}/${total}`);
+
+        } else {
+          setStatus(msg ?? `Step ${step}/${total}`);
+        }
+      }
+    );
+
+    state.layers = layers;
+    renderLayerPanel(layers);
+
+    resizeCanvas(state.imageData.width, state.imageData.height);
+    redraw();
+
+    const passes = layers[0]?.metadata?.refinementPasses ?? 1;
+    const convergenceMessage = layers[0]?.metadata?.convergenceMessage;
+    const fidelityScore      = layers[0]?.metadata?.fidelityScore;
+
+    if (convergenceMessage) {
+      if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + convergenceMessage;
+    } else if (fidelityScore !== null && fidelityScore !== undefined) {
+      if (aiStatusEl) aiStatusEl.textContent = `🤖 AI score: ${fidelityScore}/100`;
+    }
+
+    const passNote = passes > 1 ? ` after ${passes} AI passes` : '';
+    setExportEnabled(true);
+    setStatus(`Layers refined${passNote}`);
+    toast(`Layers improved${passNote}`, 'success');
+    switchMobileTab('sidebar-right');
+
+  } catch (err) {
+    console.error(err);
+    toast('Refinement failed: ' + err.message, 'error');
+    setStatus('Refinement failed');
+    if (aiStatusEl) aiStatusEl.textContent = '';
+  } finally {
+    state.processing = false;
+    btnFixAll.disabled = false;
+    btnFixAll.textContent = '✨ Fix All';
+    generateBtn.disabled = false;
+    setProgress(10, 10);
+  }
 }
 
 // ---- View tabs ----
