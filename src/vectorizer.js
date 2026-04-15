@@ -178,6 +178,50 @@ export function douglasPeucker(points, epsilon) {
 }
 
 /**
+ * Calculate the signed area of a polygon using the shoelace formula.
+ * Returns a positive value for counter-clockwise winding and negative for clockwise.
+ * @param {Array<[number,number]>} points
+ * @returns {number} absolute area in square pixels
+ */
+export function contourArea(points) {
+  let area = 0;
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    const [x1, y1] = points[i];
+    const [x2, y2] = points[(i + 1) % n];
+    area += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(area) / 2;
+}
+
+/**
+ * Smooth a contour using Chaikin's corner-cutting algorithm.
+ * Produces curves that are easier to cut cleanly than jagged pixel-aligned paths.
+ * @param {Array<[number,number]>} points
+ * @param {number}                 iterations - number of smoothing passes (1–3)
+ * @returns {Array<[number,number]>}
+ */
+export function chaikinSmooth(points, iterations = 1) {
+  if (points.length < 3) return points;
+
+  let pts = points;
+  for (let iter = 0; iter < iterations; iter++) {
+    const smoothed = [];
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const [x0, y0] = pts[i];
+      const [x1, y1] = pts[(i + 1) % n];
+      // Q = 3/4 of current + 1/4 of next
+      // R = 1/4 of current + 3/4 of next
+      smoothed.push([0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1]);
+      smoothed.push([0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1]);
+    }
+    pts = smoothed;
+  }
+  return pts;
+}
+
+/**
  * Convert a list of contours to an SVG path data string.
  * @param {Array<Array<[number,number]>>} contours
  * @param {number}                        scale     - multiply coords by this
@@ -197,6 +241,8 @@ export function contoursToSVGPath(contours, scale = 1) {
 
 /**
  * Full vectorization pipeline for a single binary mask.
+ * Includes contour smoothing (Chaikin) and minimum-area filtering to produce
+ * clean, cuttable paths suited for airbrush stencils.
  * @param {Uint8Array} mask
  * @param {number}     width
  * @param {number}     height
@@ -208,10 +254,20 @@ export function vectorize(mask, width, height, epsilon = 1.0, scale = 1) {
   const segments = marchingSquares(mask, width, height);
   const contours = stitchContours(segments);
 
+  // Minimum contour area in square pixels: removes micro-contours that are too
+  // small to cut cleanly (roughly a 2×2 pixel minimum bounding area).
+  const MIN_CONTOUR_AREA_SQ = 4;
+  const MIN_AREA = Math.max(MIN_CONTOUR_AREA_SQ, epsilon * epsilon);
+
   const simplified = contours
     .map(c => douglasPeucker(c, epsilon))
-    .filter(c => c.length >= 3);
+    .filter(c => c.length >= 3)
+    .filter(c => contourArea(c) >= MIN_AREA);
 
-  const pathData = contoursToSVGPath(simplified, scale);
-  return { pathData, contours: simplified };
+  // Apply one pass of Chaikin smoothing when simplification is low (detailed mode)
+  // This rounds sharp pixel-corner jags into smooth curves for cleaner stencil cutting
+  const smoothed = simplified.map(c => chaikinSmooth(c, epsilon <= 1.5 ? 1 : 0));
+
+  const pathData = contoursToSVGPath(smoothed, scale);
+  return { pathData, contours: smoothed };
 }

@@ -72,12 +72,13 @@ export async function runPipeline(imageData, settings, onProgress) {
   await tick();
 
   // Apply edge-preserving noise reduction
+  // rangeSigma=0.15 gives better smoothing within skin/flat regions while preserving sharp edges
   const denoised = smoothing > 0 
-    ? bilateralFilter(imageData, Math.min(smoothing + 2, 5), 0.1)
+    ? bilateralFilter(imageData, Math.min(smoothing + 2, 5), 0.15)
     : imageData;
   
-  // Sharpen edges for better definition
-  const sharpened = sharpenEdges(denoised, 0.5);
+  // Sharpen edges for crisper stencil cut lines
+  const sharpened = sharpenEdges(denoised, 0.8);
   
   // Convert to grayscale
   let gray = toGrayscale(sharpened);
@@ -87,16 +88,16 @@ export async function runPipeline(imageData, settings, onProgress) {
   
   const { width, height } = imageData;
 
-  // ---- Step 2: Convert to Pure Black & White ----
-  onProgress?.(2, totalSteps, 'Converting to pure B&W…');
+  // ---- Step 2: Tonal Contrast Enhancement ----
+  onProgress?.(2, totalSteps, 'Enhancing tonal contrast…');
   await tick();
   
-  // For stencil work, we need pure binary values (no gray)
-  // Apply aggressive contrast to remove mid-tones
+  // Apply a gentle S-curve (slope=3) to boost mid-tone separation without collapsing
+  // the tonal gradation. This preserves distinct lightness zones needed for multi-layer
+  // airbrush stencils while still increasing contrast between adjacent tones.
   for (let i = 0; i < gray.length; i++) {
-    // Sigmoid curve to push values toward 0 or 1
     const v = gray[i];
-    gray[i] = 1 / (1 + Math.exp(-12 * (v - 0.5)));
+    gray[i] = 1 / (1 + Math.exp(-3 * (v - 0.5)));
   }
   
   // ---- Step 3: Cluster / Segment ----
@@ -156,8 +157,9 @@ export async function runPipeline(imageData, settings, onProgress) {
   }
   
   // Clean up masks with morphological operations
+  // Radius 1 avoids over-merging nearby features (e.g. eyes, nostrils in portraits)
   for (let i = 0; i < k; i++) {
-    morphologicalClose(masks[i], width, height, 2);
+    morphologicalClose(masks[i], width, height, 1);
   }
 
   // ---- Step 5: Validate + Auto-fix ----
@@ -168,9 +170,9 @@ export async function runPipeline(imageData, settings, onProgress) {
     const v = validateMask(mask, width, height, 50);
 
     if (doAutoFix) {
-      // More aggressive cleanup for cleaner stencils
+      // Remove small fragments that would be too small to cut cleanly
       autoFix(mask, width, height, {
-        minIslandArea: 25, // Remove larger fragments
+        minIslandArea: 50, // Remove uncuttable fragments
         bridgeWidth:   bridgeThickness,
       });
       
@@ -191,6 +193,7 @@ export async function runPipeline(imageData, settings, onProgress) {
     const result = vectorize(mask, width, height, epsilon, 1);
     const { pathData, contours } = result;
 
+    const pixelCount = mask.reduce((s, v) => s + v, 0);
     const color = DEFAULT_COLORS[idx % DEFAULT_COLORS.length];
     const preview = buildPreview(mask, width, height, color);
 
@@ -211,11 +214,24 @@ export async function runPipeline(imageData, settings, onProgress) {
         dpi:         72,
         algorithm:   segmentationMode,
         centroid:    result.centroids?.[idx],
-        pixelCount:  mask.reduce((s, v) => s + v, 0),
+        pixelCount,
         vectorizer:  'marching-squares',
       },
     };
   }));
+
+  // Sort layers for proper airbrush buildup: broadest/base layer first (largest pixel area),
+  // then progressively smaller/more-detailed layers. This matches the stencil spray sequence
+  // where you lay down the base coat before adding detail.
+  layers.sort((a, b) => b.metadata.pixelCount - a.metadata.pixelCount);
+
+  // Re-assign sequential ids, names and colors after sorting
+  layers.forEach((layer, idx) => {
+    layer.id   = `layer-${idx}`;
+    layer.name = `Layer ${idx + 1}`;
+    layer.color = DEFAULT_COLORS[idx % DEFAULT_COLORS.length];
+    layer.previewBitmap = buildPreview(layer.mask, layer.metadata.width, layer.metadata.height, layer.color);
+  });
 
   // ---- Step 7: Assemble Shaded Composite ----
   if (enableAI) {
