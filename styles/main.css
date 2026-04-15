@@ -563,6 +563,172 @@ footer .spacer { flex: 1; }
   to   { transform: translateX(0);    opacity: 1; }
 }
 
+/* ===== MOBILE NAV (hidden on desktop) ===== */
+#mobile-nav { display: none; }
+
+/* ===== MOBILE / RESPONSIVE ===== */
+@media (max-width: 768px) {
+  html, body { overflow: hidden; }
+
+  #app {
+    grid-template-rows: 52px 44px 1fr 44px;
+    grid-template-columns: 1fr;
+    height: 100vh;   /* fallback for older browsers */
+    height: 100dvh;  /* accounts for collapsing mobile address bar */
+  }
+
+  header { grid-row: 1; grid-column: 1; }
+
+  /* ---- Mobile tab bar ---- */
+  #mobile-nav {
+    display: flex;
+    grid-row: 2;
+    grid-column: 1;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    z-index: 5;
+  }
+
+  .mobile-tab {
+    flex: 1;
+    height: 44px;
+    padding: 0 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  .mobile-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  /* ---- Panels: stack in row 3, hidden until activated ---- */
+  #sidebar-left {
+    grid-row: 3;
+    grid-column: 1;
+    display: none;
+    border-right: none;
+  }
+  #sidebar-left.mobile-active  { display: flex; }
+
+  #canvas-area {
+    grid-row: 3;
+    grid-column: 1;
+    display: none;
+  }
+  #canvas-area.mobile-active   { display: flex; }
+
+  #sidebar-right {
+    grid-row: 3;
+    grid-column: 1;
+    display: none;
+    border-left: none;
+  }
+  #sidebar-right.mobile-active { display: flex; }
+
+  /* ---- Footer ---- */
+  footer {
+    grid-row: 4;
+    grid-column: 1;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding: 0 10px;
+    height: 44px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ---- Larger touch targets ---- */
+  #drop-zone {
+    padding: 20px 16px;
+    touch-action: manipulation;
+  }
+
+  #drop-zone p {
+    display: none; /* hide "Drag & drop" hint on mobile */
+  }
+
+  #drop-zone .drop-icon::after {
+    content: ' Tap to select an image';
+    display: block;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-top: 6px;
+    font-family: inherit;
+  }
+
+  #drop-zone .btn-browse {
+    min-height: 44px;
+    font-size: 14px;
+    padding: 10px 20px;
+    touch-action: manipulation;
+  }
+
+  .url-row input,
+  .url-row button {
+    min-height: 44px;
+    font-size: 14px;
+    padding: 10px;
+    touch-action: manipulation;
+  }
+
+  #btn-generate {
+    min-height: 48px;
+    font-size: 15px;
+    touch-action: manipulation;
+  }
+
+  .setting-row input[type=range] {
+    width: 130px;
+    height: 20px;          /* bigger tap area on range */
+    touch-action: pan-x;
+  }
+
+  .setting-row input[type=number],
+  .setting-row select {
+    font-size: 14px;
+    padding: 8px;
+  }
+
+  .layer-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 15px;
+  }
+
+  /* Wider layer cards */
+  .layer-card-header { padding: 10px 12px; }
+
+  /* Canvas toolbar wrapping */
+  #canvas-toolbar { flex-wrap: wrap; gap: 6px; padding: 6px 10px; }
+
+  .zoom-controls button {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+    touch-action: manipulation;
+  }
+
+  .tab-btn {
+    min-height: 36px;
+    font-size: 13px;
+    touch-action: manipulation;
+  }
+
+  .btn-export {
+    min-height: 36px;
+    white-space: nowrap;
+    touch-action: manipulation;
+  }
+}
+
 /* ===== SCROLLBAR ===== */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

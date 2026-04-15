@@ -354,6 +354,7 @@ function setupCanvasPan() {
   const wrapper = document.getElementById('canvas-wrapper');
   if (!wrapper) return;
 
+  // --- Mouse pan ---
   let dragging = false;
   let startX = 0, startY = 0, startPX = 0, startPY = 0;
 
@@ -385,6 +386,63 @@ function setupCanvasPan() {
     e.preventDefault();
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
     setZoom(_zoom * delta);
+  }, { passive: false });
+
+  // --- Touch pan + pinch-to-zoom ---
+  let touchStartPX = 0, touchStartPY = 0;
+  let lastTouchDist = 0;
+  let inPinch = false;
+
+  /** Return the distance between two Touch objects. */
+  function getTouchDist(t0, t1) {
+    return Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY);
+  }
+
+  wrapper.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      inPinch      = false;
+      lastTouchDist = 0;
+      startX       = e.touches[0].clientX;
+      startY       = e.touches[0].clientY;
+      touchStartPX = _panX;
+      touchStartPY = _panY;
+    } else if (e.touches.length === 2) {
+      inPinch = true;
+      lastTouchDist = getTouchDist(e.touches[0], e.touches[1]);
+    }
+  }, { passive: false });
+
+  wrapper.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (e.touches.length === 1 && !inPinch) {
+      _panX = touchStartPX + (e.touches[0].clientX - startX);
+      _panY = touchStartPY + (e.touches[0].clientY - startY);
+      const vp = viewport();
+      if (vp) vp.style.translate = `${_panX}px ${_panY}px`;
+    } else if (e.touches.length === 2) {
+      inPinch = true;
+      const dist = getTouchDist(e.touches[0], e.touches[1]);
+      if (lastTouchDist > 0) {
+        setZoom(_zoom * (dist / lastTouchDist));
+      }
+      lastTouchDist = dist;
+    }
+  }, { passive: false });
+
+  wrapper.addEventListener('touchend', e => {
+    if (e.touches.length === 0) {
+      inPinch       = false;
+      lastTouchDist = 0;
+    } else if (e.touches.length === 1) {
+      // One finger left after pinch — reset pan origin so there's no jump
+      inPinch      = false;
+      lastTouchDist = 0;
+      startX       = e.touches[0].clientX;
+      startY       = e.touches[0].clientY;
+      touchStartPX = _panX;
+      touchStartPY = _panY;
+    }
   }, { passive: false });
 }
 
