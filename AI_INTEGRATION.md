@@ -4,13 +4,42 @@ This document describes the AI-powered composite evaluation feature integrated i
 
 ## Overview
 
-The AI Composite Evaluation feature uses **Groq's Vision API** to analyze the reconstructed stencil composite and provide intelligent feedback on:
+The AI Composite Evaluation feature uses **Groq's Vision API** to analyze the reconstructed stencil composite and provide intelligent feedback on **airbrush compatibility**.
 
+**Primary Goal**: Ensure layers can be airbrushed one after the next to build up the final image.
+
+### Real-World Use Case
+
+This tool generates **multi-layer airbrush stencils** used for:
+- **T-shirt airbrushing** - Custom apparel designs
+- **Canvas artwork** - Portrait art and murals
+- **Automotive custom paint** - Car hood art, motorcycle tanks
+- **Fine art** - Gallery-quality airbrush paintings
+
+**How it works in practice:**
+1. Each layer is **cut from stencil material** (vinyl, mylar, acetate)
+2. Layer 1 is placed on the surface and **airbrushed** (usually darkest/background color)
+3. Layer 1 is removed, Layer 2 is aligned using **registration marks** and airbrushed (mid-tones)
+4. This continues for all layers, **building up the image** with each pass
+5. The final result combines all layers into a complete, photorealistic image
+
+**Example progression:** See professional multi-layer airbrush stencil examples:
+- [Example 1](https://github.com/user-attachments/assets/1704e6c7-fc49-405e-90f5-3417b942b679) - Shows base layer → detail layer → highlight layer progression
+- Notice how the **white areas are the stencil** (masked off) and **colored areas are where paint is sprayed**
+- Each layer adds specific detail without destroying previous work
+
+The AI evaluates:
+
+The AI evaluates:
+
+- **Airbrush sequencing** - Will layers build up properly when airbrushed in order?
+- **Overspray prevention** - Are there gaps where paint can bleed through?
+- **Layer progression** - Do layers go from dark to light (or vice versa) correctly?
 - Fidelity to the original image
 - Layer balance and tonal distribution
-- Edge consistency across layers
-- Structural correctness (holes, bridges)
-- Cut feasibility (thin regions, detail clusters)
+- Edge consistency across layers (clean transitions when airbrushing)
+- Structural correctness (bridges won't tear during handling)
+- Cut feasibility (layers thick enough to mask effectively)
 - Overall aesthetic coherence
 
 ## Pipeline Integration
@@ -151,10 +180,10 @@ localStorage.setItem('GROQ_API_KEY', 'your-api-key-here');
    - Assemble shaded composite from layer masks
    - Convert composite and original to base64 PNG
    - Call `/api/get-groq-key` to retrieve API key
-   - Send images and metadata to Groq Vision API
-   - Receive structured JSON response
+   - Send images and metadata to Groq Vision API **with airbrush-focused evaluation prompt**
+   - Receive structured JSON response with airbrush compatibility analysis
    - Apply deterministic corrections based on feedback
-   - Store AI evaluation results in layer metadata
+   - Store AI evaluation results in layer metadata (including airbrush_ready status)
 
 ### Server-Side (Vercel Serverless Function)
 

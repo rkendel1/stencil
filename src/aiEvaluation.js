@@ -172,50 +172,113 @@ async function callGroqVisionAPI(apiKey, originalBase64, compositeBase64, layerP
  * @returns {string} Evaluation prompt
  */
 function buildEvaluationPrompt(shades, numLayers) {
-  return `You are an expert stencil artist evaluating a multi-layer stencil design.
+  return `You are an expert multi-layer airbrush stencil artist evaluating a stencil design.
 
 I'm showing you two images:
 1. The ORIGINAL image (first image)
 2. The RECONSTRUCTED COMPOSITE (second image) - created by overlaying ${numLayers} stencil layers with shades: ${shades.map(s => s.toFixed(2)).join(', ')}
 
-Your task is to evaluate the composite and provide structured feedback in JSON format.
+**CRITICAL USE CASE**: 
+This is a MULTI-LAYER AIRBRUSH STENCIL where:
+- Each layer will be CUT from stencil material (vinyl, mylar, or acetate)
+- Layers are airbrushed SEQUENTIALLY (layer 1 first, layer 2 on top, etc.)
+- Each layer adds specific tonal values to build up the complete image
+- Proper REGISTRATION/ALIGNMENT between layers is critical
+- Gaps, bridges, and overspray zones must be carefully managed
 
-Evaluate these aspects:
+Think of this like the professional multi-layer airbrush stencils used for:
+- T-shirt airbrushing
+- Canvas artwork
+- Automotive custom paint
+- Mural work
 
-1. **Fidelity to Original**: Does the composite resemble the original? Are important features missing? Are shadows/highlights correct?
+Your task is to evaluate if these layers will produce a clean, professional result when airbrushed sequentially.
 
-2. **Layer Balance**: Are some layers too dominant or empty? Does the tonal distribution match?
+Evaluate FOR SEQUENTIAL AIRBRUSHING:
 
-3. **Edge Consistency**: Are edges aligned across layers? Are there ghost edges?
+1. **Layer Sequencing & Build-up**:
+   - Do layers progress logically (typically darkest/background first, lightest/highlights last)?
+   - Will each new layer add detail without destroying the work from previous layers?
+   - Are tonal values properly distributed across layers?
 
-4. **Structural Correctness**: Are there unwanted holes? Missing or excessive bridges?
+2. **Registration & Alignment**:
+   - Are edges aligned so layers will overlay correctly?
+   - Will registration marks allow accurate positioning?
+   - Are there alignment issues that will create visible artifacts?
 
-5. **Cut Feasibility**: Are there regions too thin to cut? Clusters that will burn/melt?
+3. **Overspray Protection**:
+   - Are there GAPS between masked areas where paint from one layer will contaminate another?
+   - Are bridges positioned to prevent paint bleeding into unwanted areas?
+   - Will negative space be properly protected?
 
-6. **Aesthetic Coherence**: Does it look like a clean stencil? Are transitions smooth?
+4. **Cut & Mask Quality**:
+   - Are all masked regions thick enough to cut cleanly (minimum 2-3mm for vinyl)?
+   - Are there thin sections that will tear when removing cut stencils?
+   - Will the stencil lay flat against the surface for clean masking?
+   - Are bridges strong enough to hold the stencil together during handling?
+
+5. **Airbrush Feasibility**:
+   - Are there areas too small for effective airbrush coverage?
+   - Will fine details hold up when cut and airbrushed?
+   - Are there delicate features that need reinforcement?
+
+6. **Fidelity When Airbrushed**:
+   - Does the composite accurately represent what the final airbrushed result will look like?
+   - Are important features preserved?
+   - Is the tonal range appropriate for airbrush application?
+
+7. **Professional Quality**:
+   - Will this produce a clean, professional-looking result?
+   - Are transitions smooth between layers?
+   - Is the overall composition suitable for the airbrush medium?
 
 Return a JSON object with this structure:
 {
-  "overall_quality": "good" | "fair" | "poor",
+  "overall_quality": "excellent" | "good" | "fair" | "poor",
+  "airbrush_ready": true/false,
   "fidelity_score": 0-100,
+  "layer_sequence": {
+    "order_correct": true/false,
+    "build_up_quality": "smooth" | "acceptable" | "problematic",
+    "tonal_progression": "proper" | "needs_adjustment",
+    "recommendations": "specific advice on layer ordering for airbrushing"
+  },
+  "registration_quality": {
+    "alignment_issues": true/false,
+    "problem_areas": ["description of misalignments"],
+    "registration_marks_needed": true/false
+  },
+  "overspray_risks": [
+    {
+      "between_layers": [1, 2],
+      "location": "description of where overspray can occur",
+      "severity": "low|medium|high|critical",
+      "fix": "add bridge | adjust edge | fill gap"
+    }
+  ],
   "layer_balance": {
     "needs_adjustment": true/false,
     "suggested_weights": [0.18, 0.32, ...] // only if needs_adjustment
   },
-  "missing_features": ["feature1", "feature2", ...],
-  "ghost_edges": [
-    {"layer": 3, "region": [x, y, width, height], "severity": "low|medium|high"}
+  "airbrush_issues": [
+    {
+      "layer": 2,
+      "issue": "too_thin" | "overspray_gap" | "weak_bridge" | "detail_too_fine",
+      "location": "description",
+      "severity": "low|medium|high",
+      "fix": "specific correction needed"
+    }
   ],
-  "thin_regions": [
-    {"layer": 2, "description": "location", "severity": "low|medium|high"}
-  ],
-  "bridge_recommendations": [
-    {"layer": 1, "description": "where to add bridge", "priority": "low|medium|high"}
-  ],
-  "recommendations": "Overall advice for improving the stencil"
+  "cut_quality": {
+    "cuttable": true/false,
+    "thin_regions": [{"layer": N, "location": "...", "minimum_width_mm": 1.5}],
+    "weak_bridges": [{"layer": N, "location": "...", "recommendation": "..."}]
+  },
+  "missing_features": ["features lost in layer separation"],
+  "recommendations": "Overall professional advice for making this work as a multi-layer airbrush stencil. Be SPECIFIC about what needs to change for successful sequential airbrushing."
 }
 
-Be concise and actionable. Focus on issues that significantly impact the stencil quality.`;
+Think like a professional airbrush artist who needs to cut these layers and spray them in sequence. Be practical and detailed.`;
 }
 
 /**

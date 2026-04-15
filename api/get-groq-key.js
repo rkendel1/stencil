@@ -20,8 +20,16 @@ export default function handler(req, res) {
   const origin = req.headers.origin || req.headers.referer;
   const host = req.headers.host;
   
-  // In production, verify origin matches host
-  if (process.env.NODE_ENV === 'production' && origin) {
+  // In production, verify origin or referer matches host
+  if (process.env.NODE_ENV === 'production') {
+    if (!origin) {
+      // No origin or referer header - reject to prevent bypass
+      return res.status(403).json({ 
+        error: 'Forbidden',
+        message: 'Missing origin or referer header'
+      });
+    }
+    
     try {
       const originUrl = new URL(origin);
       if (originUrl.host !== host) {

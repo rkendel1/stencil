@@ -262,7 +262,7 @@ export async function runPipeline(imageData, settings, onProgress) {
       // Add correction warnings to layers
       if (corrections.warnings.length > 0) {
         for (let i = 0; i < layers.length; i++) {
-          layers[i].warnings = [...layers[i].warnings, ...corrections.warnings];
+          layers[i].warnings = [...(layers[i].warnings ?? []), ...corrections.warnings];
         }
       }
 
