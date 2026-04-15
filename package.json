@@ -4,8 +4,18 @@
   "description": "Multi-layer stencil generation web application",
   "type": "module",
   "scripts": {
-    "start": "npx serve . -l 8080",
-    "dev": "npx serve . -l 8080"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "vite"
+  },
+  "dependencies": {
+    "opencv.js": "^1.2.1",
+    "potrace": "^2.1.8",
+    "jimp": "^0.22.10"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0"
   },
   "keywords": ["stencil", "vectorization", "image-processing", "laser-cutter"],
   "license": "MIT"
