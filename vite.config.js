@@ -22,14 +22,8 @@ export default defineConfig({
     chunkSizeWarningLimit: 2000,
     // Enable source maps for debugging
     sourcemap: false,
-    // Minify for production
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,
-        drop_debugger: true
-      }
-    }
+    // Minify for production - use esbuild instead of terser for Node.js modules
+    minify: 'esbuild',
   },
   server: {
     port: 8080,
@@ -40,9 +34,19 @@ export default defineConfig({
   },
   // Optimize dependencies
   optimizeDeps: {
-    include: ['opencv.js', 'potrace', 'jimp'],
-    exclude: []
+    include: [],
+    exclude: ['opencv.js'],
+    esbuildOptions: {
+      // Treat Node.js built-ins as external in browser context
+      platform: 'browser'
+    }
   },
   // Handle WASM files
-  assetsInclude: ['**/*.wasm']
+  assetsInclude: ['**/*.wasm'],
+  // Resolve configuration
+  resolve: {
+    alias: {
+      // Polyfills for Node.js modules (optional, if needed)
+    }
+  }
 });
