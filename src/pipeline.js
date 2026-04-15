@@ -390,9 +390,13 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
 
   // Replace the darkest cluster mask with a smooth outer silhouette.
   // A real airbrush Layer 1 is the broad, filled base-coat shape — no internal
-  // holes or detail cuts.  The BFS flood-fill from the image border fills every
-  // enclosed gap, producing the clean outer outline expected for the first spray.
-  masks[0] = _buildSilhouetteMask(masks, width, height);
+  // holes or detail cuts (like the left panel of a two-layer skull stencil set).
+  // We use corner-based background detection + BFS flood-fill so this works for
+  // both dark and light-colored subjects on a white background.
+  masks[0] = _buildSilhouetteMask(gray, width, height);
+  // Clear the background cluster (lightest centroid = masks[k-1]) so it sorts
+  // last and the silhouette is guaranteed to become Layer 1.
+  masks[k - 1] = new Uint8Array(width * height);
 
   // ---- Step 5: Validate + Auto-fix ----
   onProgress?.(5, totalSteps, 'Validating and fixing layers…');
@@ -560,77 +564,131 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
 }
 
 /**
- * Build a smooth outer silhouette mask suitable for Layer 1 (base coat).
+ * Build a solid outer silhouette mask suitable for Layer 1 (base coat).
  *
- * The approach:
- *   1. Union all non-background segment masks (centroids are sorted
- *      darkest→lightest, so masks[k-1] is the lightest / background cluster).
- *   2. BFS flood-fill from every border pixel that is NOT in the subject union
- *      to identify the true external background.
- *   3. Every pixel NOT reached by the flood fill is part of the silhouette
- *      (including previously hollow interior areas), giving a fully-filled
- *      outer shape with no internal holes.
+ * This produces the "left panel" of a layered stencil set: a completely filled,
+ * hole-free shape of the subject with no internal cutouts.  Subsequent layers
+ * add progressively finer detail on top.
  *
- * @param {Uint8Array[]} masks  - k segment masks, ordered darkest → lightest
+ * Algorithm:
+ *   1. Sample 4 corner patches to estimate the background color (`bgValue`).
+ *      This works for both white and non-white backgrounds and is robust for
+ *      light-colored subjects (cream skull on white) because the corners are
+ *      sampled far from the subject.
+ *   2. 4-connected BFS flood-fill from every image-border pixel whose value is
+ *      within `tolerance` of `bgValue`, marking the true external background.
+ *      The BFS stops at any subject boundary that contrasts more than the
+ *      tolerance with the background — this includes dark outlines AND the
+ *      gentle cream-to-white boundary of colored illustrations.
+ *   3. Silhouette = every pixel NOT reached from the border.  Enclosed interior
+ *      holes (teeth gaps, eye sockets) have the same color as the exterior
+ *      background but are unreachable through the subject, so they are
+ *      automatically filled in, giving a solid base-coat shape.
+ *   4. Fallback: when the corner-estimated `bgValue` is dark (< 0.4), the BFS
+ *      covers < 2 % or > 97 % of the image — Otsu binary threshold is used
+ *      to produce a usable (if un-hole-filled) silhouette rather than a blank.
+ *
+ * @param {Float32Array} gray   - processed grayscale values in [0,1]
  * @param {number}       width
  * @param {number}       height
  * @returns {Uint8Array} silhouette mask (1 = subject, 0 = background)
  */
-function _buildSilhouetteMask(masks, width, height) {
-  const k = masks.length;
+function _buildSilhouetteMask(gray, width, height) {
+  const n = gray.length;
 
-  // Union of all subject (non-background) masks.
-  // masks[k-1] is the lightest cluster (background); skip it.
-  const union = new Uint8Array(width * height);
-  for (let c = 0; c < k - 1; c++) {
-    const m = masks[c];
-    for (let i = 0; i < union.length; i++) {
-      if (m[i]) union[i] = 1;
+  // ── Step 1: Estimate background color from 4 corner patches ──
+  const patchSize = Math.max(3, Math.min(8, Math.floor(Math.min(width, height) / 12)));
+  let bgSum = 0, bgSqSum = 0, bgCount = 0;
+  for (let y = 0; y < patchSize; y++) {
+    for (let x = 0; x < patchSize; x++) {
+      for (const idx of [
+        y * width + x,                               // top-left
+        y * width + (width - 1 - x),                // top-right
+        (height - 1 - y) * width + x,               // bottom-left
+        (height - 1 - y) * width + (width - 1 - x), // bottom-right
+      ]) {
+        bgSum += gray[idx]; bgSqSum += gray[idx] * gray[idx]; bgCount++;
+      }
     }
   }
+  const bgValue = bgSum / bgCount;
+  const bgStd   = Math.sqrt(Math.max(0, bgSqSum / bgCount - bgValue * bgValue));
+  // Tolerance covers background noise but stops at the subject boundary
+  // (any boundary with > ~0.04 contrast from background color is treated as subject).
+  const tolerance = Math.min(0.12, Math.max(bgStd * 4, 0.04));
 
-  // BFS flood-fill from border pixels that are NOT part of the subject union.
-  // Uses a pre-allocated array as a queue (O(n) time).
-  const bgReached = new Uint8Array(width * height);
-  const queue     = new Int32Array(width * height);
+  // ── Step 2: BFS flood-fill from image border through background pixels ──
+  const bgReached = new Uint8Array(n);
+  const queue     = new Int32Array(n);
   let head = 0, tail = 0;
 
   const enqueue = (idx) => {
-    if (!bgReached[idx] && !union[idx]) {
+    if (!bgReached[idx] && Math.abs(gray[idx] - bgValue) <= tolerance) {
       bgReached[idx] = 1;
       queue[tail++] = idx;
     }
   };
 
-  // Seed: top and bottom rows
   for (let x = 0; x < width; x++) {
     enqueue(x);
     enqueue((height - 1) * width + x);
   }
-  // Seed: left and right columns (excluding corners already added above)
   for (let y = 1; y < height - 1; y++) {
     enqueue(y * width);
     enqueue(y * width + (width - 1));
   }
 
-  // BFS: 4-connectivity
   while (head < tail) {
     const idx = queue[head++];
     const x   = idx % width;
     const y   = (idx / width) | 0;
-
     if (y > 0)           enqueue(idx - width);
     if (y < height - 1)  enqueue(idx + width);
     if (x > 0)           enqueue(idx - 1);
     if (x < width - 1)   enqueue(idx + 1);
   }
 
-  // Silhouette: every pixel NOT reachable from the border as background
-  const silhouette = new Uint8Array(width * height);
-  for (let i = 0; i < silhouette.length; i++) {
-    silhouette[i] = bgReached[i] ? 0 : 1;
+  // ── Step 3: Fallback — when BFS cannot establish a reliable boundary ──
+  // Triggers when: (a) subject fills the frame, (b) subject indistinguishable
+  // from background, OR (c) corners are dark (tightly-cropped dark subject).
+  let reachedCount = 0;
+  for (let i = 0; i < n; i++) reachedCount += bgReached[i];
+  const needsFallback = reachedCount < n * 0.02
+                     || reachedCount > n * 0.97
+                     || bgValue < 0.4;
+
+  if (needsFallback) {
+    // Otsu binary threshold as a best-effort silhouette
+    const numBins = 256;
+    const histogram = new Int32Array(numBins);
+    for (let i = 0; i < n; i++) {
+      histogram[Math.min(numBins - 1, Math.floor(gray[i] * numBins))]++;
+    }
+    let s = 0;
+    for (let i = 0; i < numBins; i++) s += i * histogram[i];
+    let sumB = 0, countB = 0, maxVar = 0, bestT = 0;
+    for (let t = 0; t < numBins; t++) {
+      countB += histogram[t];
+      if (countB === 0) continue;
+      const countF = n - countB;
+      if (countF === 0) break;
+      sumB += t * histogram[t];
+      const meanB = sumB / countB;
+      const meanF = (s - sumB) / countF;
+      const variance = countB * countF * (meanB - meanF) * (meanB - meanF);
+      if (variance > maxVar) { maxVar = variance; bestT = t; }
+    }
+    const thresh = (bestT + 1) / numBins;
+    const binary = new Uint8Array(n);
+    for (let i = 0; i < n; i++) binary[i] = gray[i] < thresh ? 1 : 0;
+    return binary;
   }
 
+  // ── Step 4: Silhouette = everything NOT reached from the border ──
+  const silhouette = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    silhouette[i] = bgReached[i] ? 0 : 1;
+  }
   return silhouette;
 }
 
