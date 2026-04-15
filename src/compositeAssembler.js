@@ -27,7 +27,7 @@ export function assembleShadedComposite(masks, width, height) {
   for (let i = 0; i < width * height; i++) {
     let pixelValue = 0;
     for (let layerIdx = 0; layerIdx < numLayers; layerIdx++) {
-      if (masks[layerIdx][i]) {
+      if (masks[layerIdx][i] !== 0) {
         pixelValue += shades[layerIdx];
       }
     }
@@ -91,7 +91,7 @@ export async function generateLayerPreviews(masks, width, height) {
   for (const mask of masks) {
     const data = new Uint8ClampedArray(width * height * 4);
     for (let i = 0; i < width * height; i++) {
-      const val = mask[i] ? 255 : 0;
+      const val = mask[i] !== 0 ? 255 : 0;
       data[i * 4]     = val;
       data[i * 4 + 1] = val;
       data[i * 4 + 2] = val;

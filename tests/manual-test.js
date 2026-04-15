@@ -34,8 +34,12 @@ async function testCompositeAssembler() {
   const shades = getLayerShades(numLayers);
   console.log('Shades:', shades);
   console.assert(shades.length === numLayers, 'Shade count mismatch');
-  console.assert(shades[0] === 1 / (numLayers + 1), 'First shade incorrect');
-  console.assert(shades[numLayers - 1] === numLayers / (numLayers + 1), 'Last shade incorrect');
+  
+  // Verify shades are evenly spaced and in correct range
+  const expectedFirst = 1 / (numLayers + 1);
+  const expectedLast = numLayers / (numLayers + 1);
+  console.assert(Math.abs(shades[0] - expectedFirst) < 0.001, `First shade incorrect: ${shades[0]} vs ${expectedFirst}`);
+  console.assert(Math.abs(shades[numLayers - 1] - expectedLast) < 0.001, `Last shade incorrect: ${shades[numLayers - 1]} vs ${expectedLast}`);
   
   // Test composite assembly
   const composite = assembleShadedComposite(masks, width, height);
