@@ -389,9 +389,9 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   }
 
   // Layer 1 = solid negative-space silhouette of the main subject.
-  // Border flood-fill from every edge pixel identifies the background;
-  // the subject is everything the fill cannot reach.
-  masks[0] = _buildSilhouetteMask(gray, width, height);
+  // Union all non-background k-means clusters + aggressive morphological closing
+  // creates the broadest possible filled base-coat shape.
+  masks[0] = _buildSilhouetteMask(masks, width, height);
 
   // INVERT ALL MASKS: stencils are cutouts (negative space), not filled shapes.
   // 1 = stencil material (opaque), 0 = cutout (where paint passes through).
@@ -574,77 +574,34 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
 /**
  * Build the Layer 1 silhouette: a solid filled shape of the main subject.
  *
- * Flood-fills the background from every border pixel, expanding only through
- * "light" pixels (value ≥ expandThreshold).  Dark edges—such as the outline
- * around a cartoon skull—block the fill from entering the subject region.
- * Everything the flood-fill cannot reach is the subject silhouette.
+ * Uses k-means segmentation to identify distinct tonal regions, then unions
+ * all non-background clusters (darkest k-1 clusters) to form the subject.
+ * Aggressive morphological closing fills interior holes (eyes, teeth, decorations).
  *
- * @param {Float32Array} gray   - S-curve-enhanced grayscale values in [0, 1]
+ * @param {Uint8Array[]} masks  - k k-means cluster masks, ordered darkest→lightest
  * @param {number}       width
  * @param {number}       height
  * @returns {Uint8Array} silhouette mask  (1 = subject, 0 = background)
  */
-function _buildSilhouetteMask(gray, width, height) {
+function _buildSilhouetteMask(masks, width, height) {
+  const k = masks.length;
   const n = width * height;
 
-  // Estimate background brightness from image corners (75th-percentile of a
-  // small sample so a partially-covered corner doesn't skew the result).
-  const cr   = Math.max(1, Math.min(8, Math.floor(Math.min(width, height) * 0.05)));
-  const vals = [];
-  for (let dy = 0; dy < cr; dy++) {
-    for (let dx = 0; dx < cr; dx++) {
-      vals.push(gray[dy * width + dx]);
-      vals.push(gray[dy * width + (width - 1 - dx)]);
-      vals.push(gray[(height - 1 - dy) * width + dx]);
-      vals.push(gray[(height - 1 - dy) * width + (width - 1 - dx)]);
+  // Union all non-background clusters (masks[0..k-2]; masks[k-1] is lightest/background)
+  const union = new Uint8Array(n);
+  for (let c = 0; c < k - 1; c++) {
+    const m = masks[c];
+    for (let i = 0; i < n; i++) {
+      if (m[i]) union[i] = 1;
     }
   }
-  vals.sort((a, b) => a - b);
-  const bgValue = vals[Math.floor(vals.length * 0.75)];
 
-  // BFS expands through pixels brighter than this value.
-  // At 65 % of bgValue the threshold sits well below the background and well
-  // above typical dark outlines, so only outlines/edges stop the fill.
-  const expandThreshold = Math.max(0.25, bgValue * 0.65);
+  // Aggressive morphological closing: fills ALL interior holes (eyes, sockets, teeth,
+  // decorative cutouts) and smooths the boundary. Radius 5 creates the broadest
+  // possible base-coat silhouette.
+  morphologicalClose(union, width, height, 5);
 
-  // Flood-fill the background from every border pixel.
-  const bgMask = new Uint8Array(n);
-  const queue  = [];
-  let   head   = 0;
-
-  const tryAdd = (idx) => {
-    if (bgMask[idx] || gray[idx] < expandThreshold) return;
-    bgMask[idx] = 1;
-    queue.push(idx);
-  };
-
-  for (let x = 0; x < width; x++) {
-    tryAdd(x);
-    tryAdd((height - 1) * width + x);
-  }
-  for (let y = 1; y < height - 1; y++) {
-    tryAdd(y * width);
-    tryAdd(y * width + width - 1);
-  }
-
-  while (head < queue.length) {
-    const idx = queue[head++];
-    const x   = idx % width;
-    const y   = (idx / width) | 0;
-    if (y > 0)           tryAdd(idx - width);
-    if (y < height - 1)  tryAdd(idx + width);
-    if (x > 0)           tryAdd(idx - 1);
-    if (x < width - 1)   tryAdd(idx + 1);
-  }
-
-  // Subject = every pixel the background fill could not reach.
-  const silhouette = new Uint8Array(n);
-  for (let i = 0; i < n; i++) silhouette[i] = bgMask[i] ? 0 : 1;
-
-  // Close small interior holes and smooth the outer boundary.
-  morphologicalClose(silhouette, width, height, 5);
-
-  return silhouette;
+  return union;
 }
 
 /**
