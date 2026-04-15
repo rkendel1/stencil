@@ -268,7 +268,10 @@
       A professional multi-layer stencil generation tool. Upload any image, choose the number of layers, and generate clean vector stencil files suitable for laser cutters, vinyl cutters, CNC plotters, and manual cutting workflows.
     </p>
     <p style="color:var(--text-dim);font-size:12px;line-height:1.6;">
-      <strong style="color:var(--text)">Pipeline:</strong> K-means / posterize segmentation → marching-squares vectorization → island detection &amp; bridge generation → SVG / PDF / PNG export with registration marks.
+      <strong style="color:var(--text)">Pipeline:</strong> Enhanced preprocessing → B&amp;W conversion → K-means/threshold/posterize segmentation → binary masking → validation &amp; auto-fix → vectorization → optional AI composite evaluation → SVG/PDF/PNG export with registration marks.
+    </p>
+    <p style="color:var(--text-dim);font-size:11px;line-height:1.5;margin-top:8px;">
+      <strong style="color:var(--text)">AI Features:</strong> Groq Vision API analyzes composite quality, layer balance, edge consistency, and cut feasibility. Enable in settings (requires API key).
     </p>
     <div class="modal-actions">
       <button class="btn-ok" id="about-close">Close</button>
