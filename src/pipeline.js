@@ -11,7 +11,7 @@ import { kmeans, posterize, adaptiveThreshold, toBinaryMask } from './kmeans.js'
 import { vectorize } from './vectorizer.js';
 import { validateMask, autoFix, morphologicalClose } from './validator.js';
 import { assembleShadedComposite, imageDataToBase64, generateLayerPreviews, getLayerShades } from './compositeAssembler.js';
-import { evaluateComposite, applyAICorrections, assessImageForSettings } from './aiEvaluation.js';
+import { evaluateComposite, applyAICorrections, assessImageForSettings, generateAISilhouette } from './aiEvaluation.js';
 
 // Palette of default layer colors
 const DEFAULT_COLORS = [
@@ -374,25 +374,53 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   }
 
   // ---- Step 4: Build masks ----
-  onProgress?.(4, totalSteps, 'Building clean binary masks…');
+  onProgress?.(4, totalSteps, 'Building Layer 1 silhouette with AI…');
   await tick();
 
+  // **AI-NATIVE LAYER 1 GENERATION**
+  // Replace ALL algorithmic approaches (k-means cluster union, border detection, 
+  // flood-fill) with pure AI-based subject segmentation.
+  
+  // Convert current imageData to base64 for AI
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.putImageData(imageData, 0, 0);
+  const imageBase64 = canvas.toDataURL('image/png');
+  
+  // Generate AI silhouette for Layer 1
+  let aiSilhouette = await generateAISilhouette(imageBase64, width, height);
+  
+  if (!aiSilhouette) {
+    // Fallback: if AI unavailable, use simple binary threshold
+    console.warn('AI silhouette unavailable, using threshold fallback');
+    const threshold = 0.5;
+    aiSilhouette = new Uint8Array(width * height);
+    for (let i = 0; i < gray.length; i++) {
+      // Lower gray values (darker) = subject; higher (lighter) = background
+      aiSilhouette[i] = gray[i] < threshold ? 1 : 0;
+    }
+    morphologicalClose(aiSilhouette, width, height, 7);
+  }
+  
+  // Build k-means masks for Layers 2-N (detail layers)
+  onProgress?.(4, totalSteps, 'Building detail layer masks…');
+  await tick();
+  
   const masks = Array.from({ length: k }, () => new Uint8Array(width * height));
   for (let i = 0; i < assignments.length; i++) {
     masks[assignments[i]][i] = 1;
   }
   
-  // Clean up masks with morphological operations
+  // Clean up detail masks with morphological operations
   // Radius 1 avoids over-merging nearby features (e.g. eyes, nostrils in portraits)
   for (let i = 0; i < k; i++) {
     morphologicalClose(masks[i], width, height, 1);
   }
 
-  // Replace the darkest cluster mask with the simplest possible outer silhouette.
-  // A real airbrush Layer 1 is the broad, filled base-coat shape — no internal
-  // holes or detail cuts (like the left panel of a two-layer skull stencil set).
-  // Union all subject clusters + aggressive morphological closing fills ALL holes.
-  masks[0] = _buildSilhouetteMask(masks, width, height);
+  // Replace masks[0] with AI-generated silhouette
+  masks[0] = aiSilhouette;
 
   // INVERT ALL MASKS: stencils are cutouts (negative space), not filled shapes.
   // 1 = stencil material (opaque), 0 = cutout (where paint passes through).
@@ -570,43 +598,6 @@ async function _runPipelineCore(imageData, opts, onProgress, totalSteps) {
   onProgress?.(totalSteps, totalSteps, 'Complete');
 
   return { layers, fidelityScore: null, evaluation: null };
-}
-
-/**
- * Build a solid outer silhouette mask suitable for Layer 1 (base coat).
- *
- * This produces the broadest possible filled silhouette by unioning all subject
- * clusters and applying aggressive morphological closing to fill ALL interior holes.
- * The global inversion step (applied to all masks) will convert this to a cutout.
- *
- * Algorithm:
- *   1. Union all subject k-means clusters (masks[0..k-2]; masks[k-1] is background)
- *   2. Apply aggressive morphological closing (radius 5) to fill ALL interior holes
- *      (eyes, teeth, decorations) creating the broadest possible silhouette
- *
- * @param {Uint8Array[]} masks  - k segment masks, ordered darkest → lightest
- * @param {number}       width
- * @param {number}       height
- * @returns {Uint8Array} silhouette mask (1 = subject silhouette, 0 = background)
- */
-function _buildSilhouetteMask(masks, width, height) {
-  const k = masks.length;
-  const n = width * height;
-
-  // Union all subject clusters (skip masks[k-1] which is the lightest/background)
-  const union = new Uint8Array(n);
-  for (let c = 0; c < k - 1; c++) {
-    const m = masks[c];
-    for (let i = 0; i < n; i++) {
-      if (m[i]) union[i] = 1;
-    }
-  }
-
-  // Aggressive morphological closing: fills ALL interior holes and smooths boundary
-  // Radius 5 is large enough to close eye sockets, teeth gaps, and decorative cutouts
-  morphologicalClose(union, width, height, 5);
-
-  return union;
 }
 
 /**
