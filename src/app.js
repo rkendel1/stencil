@@ -4,7 +4,7 @@
  */
 
 import { loadFromFile, loadFromURL, imageToData } from './imageLoader.js';
-import { runPipeline } from './pipeline.js';
+import { runPipeline, updateLayerColor } from './pipeline.js';
 import {
   initUI, renderLayerPanel, setOriginalImage,
   setViewMode, resizeCanvas, redraw,
@@ -41,6 +41,7 @@ const autoFixToggle = $('auto-fix');
 const enableAIToggle = $('enable-ai');
 const regMarks      = $('reg-marks');
 const bridgeThick   = $('bridge-thickness');
+const aiStatusEl    = $('ai-status');
 
 // Export buttons
 const btnSVG     = $('btn-export-svg');
@@ -48,6 +49,9 @@ const btnPDF     = $('btn-export-pdf');
 const btnPNG     = $('btn-export-png');
 const btnAll     = $('btn-export-all');
 const btnOptions = $('btn-export-options');
+
+// Layers panel
+const btnFixAll  = $('btn-fix-all-layers');
 
 // Modal
 const modalOverlay = $('modal-overlay');
@@ -75,6 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupLayerListEvents();
   setupKeyboardShortcuts();
   setupMobileNav();
+  setupFixAllBtn();
 
   // Focus the drop zone for keyboard users
   dropZone.focus();
@@ -213,7 +218,9 @@ async function generateLayers() {
   state.processing = true;
   generateBtn.disabled = true;
   generateBtn.textContent = '⏳ Processing…';
+  if (aiStatusEl) aiStatusEl.textContent = '';
 
+  const enableAI = enableAIToggle.checked;
   const settings = {
     layerCount:       parseInt(layerCount.value, 10) || 4,
     segmentationMode: segMode.value,
@@ -221,7 +228,7 @@ async function generateLayers() {
     simplify:         parseFloat(simplify.value),
     autoFix:          autoFixToggle.checked,
     bridgeThickness:  parseInt(bridgeThick.value, 10) || 4,
-    enableAI:         enableAIToggle.checked,
+    enableAI,
     originalImageData: state.originalImageData,
   };
 
@@ -229,22 +236,66 @@ async function generateLayers() {
     const layers = await runPipeline(
       state.imageData,
       settings,
-      (step, total, msg) => {
+      (step, total, msg, iterCtx) => {
         setProgress(step, total);
-        setStatus(msg ?? `Step ${step}/${total}`);
+
+        if (step === 0) {
+          setStatus('🤖 ' + (msg ?? 'AI assessing image…'));
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 Analysing image…';
+
+        } else if (iterCtx && iterCtx.iteration > 1) {
+          // Refinement pass — show iteration number and live best score
+          const passLabel = `Pass ${iterCtx.iteration}`;
+          const scoreHint = iterCtx.bestScore >= 0
+            ? ` · best score so far: ${iterCtx.bestScore}/100`
+            : '';
+          if (aiStatusEl) {
+            aiStatusEl.textContent = iterCtx.converged
+              ? `🤖 Converged at ${iterCtx.bestScore}/100`
+              : `🔄 ${passLabel}${scoreHint}`;
+          }
+          setStatus(msg ?? `${passLabel}: step ${step}/${total}`);
+
+        } else if (step === 8 || step === 9 || step === 10) {
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + (msg ?? '');
+          setStatus(msg ?? `Step ${step}/${total}`);
+
+        } else {
+          if (aiStatusEl && (aiStatusEl.textContent.startsWith('🤖 Anal') ||
+                             aiStatusEl.textContent === '')) {
+            // leave blank during core steps on first pass
+          }
+          setStatus(msg ?? `Step ${step}/${total}`);
+        }
       }
     );
 
     state.layers = layers;
     renderLayerPanel(layers);
+    if (btnFixAll) btnFixAll.disabled = false;
+
+    // Show final AI quality score and convergence message
+    const convergenceMessage = layers[0]?.metadata?.convergenceMessage;
+    const fidelityScore      = layers[0]?.metadata?.fidelityScore;
+    const aiEval             = layers[0]?.metadata?.aiEvaluation;
+    if (convergenceMessage) {
+      if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + convergenceMessage;
+    } else if (fidelityScore !== null && fidelityScore !== undefined && aiEval && !aiEval.skipped) {
+      const quality = aiEval.overall_quality ?? '';
+      if (aiStatusEl) aiStatusEl.textContent = `🤖 AI score: ${fidelityScore}/100 — ${quality}`;
+    } else if (aiEval?.skipped) {
+      if (aiStatusEl) aiStatusEl.textContent = '';
+    }
 
     // Resize canvas to match processing resolution
     resizeCanvas(state.imageData.width, state.imageData.height);
     redraw();
 
+    const passes = layers[0]?.metadata?.refinementPasses ?? 1;
+    const passNote = passes > 1 ? ` (${passes} AI passes)` : '';
     setExportEnabled(true);
-    setStatus(`${layers.length} layers generated`);
-    toast(`${layers.length} layers generated`, 'success');
+    setStatus(`${layers.length} layers generated${passNote}`);
+    toast(`${layers.length} layers generated${passNote}`, 'success');
 
     // On mobile, jump to the Layers panel so the user can review results
     switchMobileTab('sidebar-right');
@@ -253,11 +304,135 @@ async function generateLayers() {
     console.error(err);
     toast('Generation failed: ' + err.message, 'error');
     setStatus('Generation failed');
+    if (aiStatusEl) aiStatusEl.textContent = '';
   } finally {
     state.processing = false;
     generateBtn.disabled = false;
     generateBtn.textContent = '⚡ Generate Layers';
-    setProgress(7, 7); // complete
+    setProgress(enableAI ? 10 : 7, enableAI ? 10 : 7); // complete
+  }
+}
+
+// ---- Fix All Layers ----
+
+function setupFixAllBtn() {
+  if (!btnFixAll) return;
+  btnFixAll.addEventListener('click', async () => {
+    if (!state.imageData || state.processing) return;
+    await fixAllLayersWithAI();
+  });
+}
+
+/**
+ * Re-run the full infinite AI refinement pipeline with more aggressive initial
+ * settings derived from the current layer state, then replace state.layers with
+ * the best result.  Progress is shown in the same status / AI-status areas as
+ * the main Generate flow.
+ */
+async function fixAllLayersWithAI() {
+  if (!state.imageData) return;
+
+  state.processing = true;
+  btnFixAll.disabled = true;
+  btnFixAll.textContent = '⏳ Refining…';
+  generateBtn.disabled = true;
+  if (aiStatusEl) aiStatusEl.textContent = '🤖 Re-running with AI refinement…';
+
+  // Derive a starting point from the current layers so we continue from where
+  // we left off rather than starting completely cold.
+  const currentLayers = state.layers;
+  const currentLayerCount = currentLayers.length || parseInt(layerCount.value, 10) || 4;
+
+  // Escalate from whatever settings produced the current layers:
+  // - preserve layer count
+  // - force high smoothing and large minIslandArea so the very first pass
+  //   already removes most fragments before AI takes over
+  const imageArea = state.imageData.width * state.imageData.height;
+  const aggressiveMinArea = Math.max(200, Math.floor(imageArea * 0.0005));
+
+  // Read the previous AI-suggested smoothing from metadata (if available)
+  const prevSmoothing = currentLayers[0]?.metadata?.aiSettings?.smoothing
+    ?? parseInt(smoothing.value, 10);
+  const startSmoothing = Math.min(5, prevSmoothing + 1); // nudge up by one
+
+  const settings = {
+    layerCount:       currentLayerCount,
+    segmentationMode: segMode.value,
+    smoothing:        startSmoothing,
+    simplify:         parseFloat(simplify.value),
+    autoFix:          true,           // always on for fix-all
+    bridgeThickness:  parseInt(bridgeThick.value, 10) || 4,
+    enableAI:         true,           // always use AI for fix-all
+    originalImageData: state.originalImageData,
+    minIslandArea:    aggressiveMinArea,
+  };
+
+  try {
+    const layers = await runPipeline(
+      state.imageData,
+      settings,
+      (step, total, msg, iterCtx) => {
+        setProgress(step, total);
+
+        if (step === 0) {
+          setStatus('🤖 ' + (msg ?? 'AI assessing image…'));
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 Analysing image…';
+
+        } else if (iterCtx && iterCtx.iteration > 1) {
+          const passLabel = `Pass ${iterCtx.iteration}`;
+          const scoreHint = iterCtx.bestScore >= 0
+            ? ` · best: ${iterCtx.bestScore}/100`
+            : '';
+          if (aiStatusEl) {
+            aiStatusEl.textContent = iterCtx.converged
+              ? `🤖 Converged at ${iterCtx.bestScore}/100`
+              : `🔄 ${passLabel}${scoreHint}`;
+          }
+          setStatus(msg ?? `${passLabel}: step ${step}/${total}`);
+
+        } else if (step === 8 || step === 9 || step === 10) {
+          if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + (msg ?? '');
+          setStatus(msg ?? `Step ${step}/${total}`);
+
+        } else {
+          setStatus(msg ?? `Step ${step}/${total}`);
+        }
+      }
+    );
+
+    state.layers = layers;
+    renderLayerPanel(layers);
+
+    resizeCanvas(state.imageData.width, state.imageData.height);
+    redraw();
+
+    const passes = layers[0]?.metadata?.refinementPasses ?? 1;
+    const convergenceMessage = layers[0]?.metadata?.convergenceMessage;
+    const fidelityScore      = layers[0]?.metadata?.fidelityScore;
+
+    if (convergenceMessage) {
+      if (aiStatusEl) aiStatusEl.textContent = '🤖 ' + convergenceMessage;
+    } else if (fidelityScore !== null && fidelityScore !== undefined) {
+      if (aiStatusEl) aiStatusEl.textContent = `🤖 AI score: ${fidelityScore}/100`;
+    }
+
+    const passNote = passes > 1 ? ` after ${passes} AI passes` : '';
+    setExportEnabled(true);
+    setStatus(`Layers refined${passNote}`);
+    toast(`Layers improved${passNote}`, 'success');
+    switchMobileTab('sidebar-right');
+
+  } catch (err) {
+    console.error(err);
+    toast('Refinement failed: ' + err.message, 'error');
+    setStatus('Refinement failed');
+    if (aiStatusEl) aiStatusEl.textContent = '';
+  } finally {
+    state.processing = false;
+    btnFixAll.disabled = false;
+    btnFixAll.textContent = '✨ Fix All';
+    generateBtn.disabled = false;
+    setProgress(10, 10);
   }
 }
 
