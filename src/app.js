@@ -38,6 +38,7 @@ const segMode       = $('seg-mode');
 const smoothing     = $('smoothing');
 const simplify      = $('simplify');
 const autoFixToggle = $('auto-fix');
+const enableAIToggle = $('enable-ai');
 const regMarks      = $('reg-marks');
 const bridgeThick   = $('bridge-thickness');
 
@@ -219,7 +220,7 @@ async function generateLayers() {
     simplify:         parseFloat(simplify.value),
     autoFix:          autoFixToggle.checked,
     bridgeThickness:  parseInt(bridgeThick.value, 10) || 4,
-    enableAI:         true,
+    enableAI:         enableAIToggle.checked,
     originalImageData: state.originalImageData,
   };
 

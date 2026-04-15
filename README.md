@@ -8,17 +8,20 @@ A professional-grade web application for generating multi-layer stencil designs 
 - **Multi-Layer Segmentation**: K-means, adaptive thresholding, or posterization
 - **Professional Vectorization**: Powered by Potrace for industry-standard Bezier curves
 - **Advanced Image Processing**: OpenCV.js integration for optimized operations
+- **AI-Powered Evaluation**: Groq Vision API for composite quality analysis
 - **Intelligent Auto-Fix**: Automatic island detection and bridge generation
 - **Clean Output**: SVG, PDF, PNG export with registration marks
 
 ### Image Processing Pipeline
 1. **Preprocessing**: Bilateral filtering, histogram normalization, edge sharpening
-2. **Segmentation**: Otsu's method, k-means clustering, or posterization
-3. **Binary Conversion**: Sigmoid contrast compression for pure B&W
-4. **Morphological Cleanup**: Closing operations to smooth boundaries
-5. **Validation**: Fragment removal (<25px), connectivity analysis
+2. **B&W Conversion**: Sigmoid contrast compression for pure black & white
+3. **Segmentation**: K-means clustering, adaptive thresholding, or posterization
+4. **Mask Building**: Binary mask generation with morphological cleanup
+5. **Validation & Auto-Fix**: Island detection, bridge generation, connectivity analysis
 6. **Vectorization**: Marching squares + Douglas-Peucker simplification
-7. **Export**: SVG paths with color fills and registration marks
+7. **AI Structural Review**: Optional AI-powered composite evaluation
+8. **Assemble Layers**: Shaded composite generation (when AI enabled)
+9. **AI Composite Evaluation**: Groq Vision API analysis and corrections (when AI enabled)
 
 ## Quick Start
 
@@ -83,12 +86,36 @@ Push to `main` or open a PR, and GitHub Actions will handle deployment automatic
 
 ### Environment Configuration
 
+#### Groq AI Integration (Optional)
+
+To enable AI-powered composite evaluation:
+
+1. Sign up for a Groq API key at [console.groq.com](https://console.groq.com/)
+2. In Vercel dashboard → Settings → Environment Variables:
+   - **Name**: `GROQ_API_KEY`
+   - **Value**: Your Groq API key
+   - **Environment**: All (Production, Preview, Development)
+3. Redeploy your application
+
+The AI evaluation feature will automatically activate when the API key is configured.
+
+**What AI Evaluation Provides:**
+- Fidelity comparison between original and reconstructed composite
+- Layer balance analysis and recommendations
+- Edge consistency detection (ghost edges)
+- Structural correctness validation
+- Cut feasibility assessment (thin regions, detail clusters)
+- Aesthetic coherence scoring
+
+#### Production Configuration
+
 For production deployment, the following are pre-configured:
 - ✅ Vite build optimization with code splitting
 - ✅ Asset caching headers (1 year for immutable assets)
 - ✅ WASM support for OpenCV.js
 - ✅ Security headers (XSS, Frame, Content-Type)
 - ✅ Clean URLs and SPA routing
+- ✅ Serverless functions for secure API key management
 
 ## Technology Stack
 
@@ -134,7 +161,11 @@ stencil/
 │   ├── exporter.js               # SVG/PDF/PNG export
 │   ├── ui.js                     # User interface
 │   ├── opencvIntegration.js      # OpenCV.js wrapper
-│   └── potraceIntegration.js     # Potrace wrapper
+│   ├── potraceIntegration.js     # Potrace wrapper
+│   ├── compositeAssembler.js     # Shaded composite generation
+│   └── aiEvaluation.js           # Groq AI integration
+├── api/
+│   └── get-groq-key.js           # Vercel serverless function
 ├── styles/
 │   └── main.css                  # Application styles
 ├── index.html                    # Entry point
@@ -153,6 +184,7 @@ stencil/
    - Smoothing level (0-5)
    - Simplification tolerance
    - Auto-fix islands (recommended)
+   - AI Evaluation (optional, requires Groq API key)
    - Bridge thickness
 3. **Generate**: Click "Generate Layers"
 4. **Review**: Check layers, toggle visibility, adjust colors
